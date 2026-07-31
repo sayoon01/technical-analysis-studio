@@ -1,5 +1,6 @@
 # Technical Analysis Studio
 <img width="1348" height="1179" alt="image" src="https://github.com/user-attachments/assets/0728a465-6c43-4dc2-a41b-476f31d4136c" />
+<img width="1704" height="1258" alt="image" src="https://github.com/user-attachments/assets/edb87726-0e74-460d-bc23-c0549bebe4ea" />
 
 **전문가 기술분석서** 생성 시스템 (Ollama agents + deterministic skills).  
 

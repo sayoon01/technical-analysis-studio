@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.api.deps import get_edition_service
+from backend.skills.retrieval.embedder import EmbeddingError
 
 router = APIRouter(tags=["editions-sections"])
 
@@ -37,6 +38,11 @@ def create_and_produce(project_id: str, body: ProduceBody | None = None):
         raise HTTPException(404, "Project not found") from None
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
+    except EmbeddingError as e:
+        raise HTTPException(
+            503,
+            f"Embedding unavailable (retry later): {e}",
+        ) from e
 
 
 @router.post("/api/projects/{project_id}/impact/preview")
@@ -84,6 +90,11 @@ def resume_edition(edition_id: str):
         raise HTTPException(404, "Edition not found") from None
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
+    except EmbeddingError as e:
+        raise HTTPException(
+            503,
+            f"Embedding unavailable (retry 이어쓰기): {e}",
+        ) from e
 
 
 @router.get("/api/editions/{edition_id}/diff/{other_edition_id}")

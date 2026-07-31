@@ -1,4 +1,7 @@
-"""Text embedder — Ollama embeddings with deterministic hash fallback."""
+"""Text embedder — Ollama (bge-m3 / 1024-d) with explicit hash-only offline mode.
+
+Vector indexes must never mix hash(256) and model(1024) vectors.
+"""
 
 from __future__ import annotations
 
@@ -15,9 +18,18 @@ from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
-_FALLBACK_DIM = 256
+# Hash fallback dim (offline / TAS_EMBEDDING_MODE=hash only). Never write into
+# an Ollama-backed index.
+_HASH_DIM = 256
+# Default index / search dim for bge-m3
+_DEFAULT_INDEX_DIM = 1024
+
 _cache_lock = threading.Lock()
 _dim_cache: dict[str, int] = {}
+
+
+class EmbeddingError(RuntimeError):
+    """Raised when a required embedding cannot be produced at the index dimension."""
 
 
 def embedding_model() -> str:
@@ -28,54 +40,94 @@ def embedding_model() -> str:
     )
 
 
-def embed_text(text: str, dim: int | None = None) -> list[float]:
-    """Embed text via Ollama when available; otherwise hashing fallback.
+def index_embed_dim() -> int:
+    """Canonical dimension for vector indexes in Ollama/bge-m3 mode."""
+    env = os.getenv("EMBEDDING_DIM")
+    if env:
+        return int(env)
+    with _cache_lock:
+        cached = _dim_cache.get(embedding_model())
+    return int(cached or _DEFAULT_INDEX_DIM)
 
-    Callers must not assume a fixed dimension — use len(embed_text(...)).
+
+def use_ollama_embeddings() -> bool:
+    if settings.llm_mode == "offline":
+        return False
+    mode = os.getenv("TAS_EMBEDDING_MODE", "ollama").lower()
+    return mode not in ("hash", "offline", "local")
+
+
+def embed_text(
+    text: str,
+    dim: int | None = None,
+    *,
+    strict: bool | None = None,
+) -> list[float]:
+    """Embed text.
+
+    - Ollama mode (default): always returns ``index_embed_dim()`` vectors.
+      Failures raise ``EmbeddingError`` (no silent hash fallback into indexes).
+    - Hash/offline mode: deterministic ``_HASH_DIM`` (or ``dim``) vectors.
     """
+    if strict is None:
+        strict = use_ollama_embeddings()
+
     model = embedding_model()
-    use_ollama = settings.llm_mode != "offline" and os.getenv(
-        "TAS_EMBEDDING_MODE", "ollama"
-    ).lower() not in ("hash", "offline", "local")
-    if use_ollama:
+    if use_ollama_embeddings():
+        expected = dim or index_embed_dim()
         try:
-            vec = _ollama_embed(text, model=model)
-            if dim is not None and len(vec) != dim:
-                # Rare: caller asked for legacy dim — pad/truncate after normalize
-                return _fit_dim(vec, dim)
+            vec = _ollama_embed(text, model=model, expected_dim=expected)
+            if len(vec) != expected:
+                raise EmbeddingError(
+                    f"embedding dim mismatch: got {len(vec)}, expected {expected} "
+                    f"(model={model})"
+                )
             return vec
+        except EmbeddingError:
+            raise
         except Exception as e:
-            logger.warning("ollama embedding failed (%s); using hash fallback: %s", model, e)
-    return _hash_embed(text, dim or _FALLBACK_DIM)
+            msg = f"ollama embedding failed ({model}): {e}"
+            if strict:
+                raise EmbeddingError(msg) from e
+            logger.warning("%s; hash fallback disabled for index safety", msg)
+            raise EmbeddingError(msg) from e
+
+    return _hash_embed(text, dim or _HASH_DIM)
 
 
 def cosine(a: list[float], b: list[float]) -> float:
-    n = min(len(a), len(b))
-    if n == 0:
+    if not a or not b or len(a) != len(b):
         return 0.0
-    return sum(a[i] * b[i] for i in range(n))
+    return sum(a[i] * b[i] for i in range(len(a)))
 
 
-def _ollama_embed(text: str, *, model: str) -> list[float]:
+def _ollama_embed(text: str, *, model: str, expected_dim: int) -> list[float]:
     prompt = (text or "").strip()
     if not prompt:
-        # Match model dim if known
-        d = _dim_cache.get(model, _FALLBACK_DIM)
-        return [0.0] * d
+        return [0.0] * expected_dim
     url = f"{settings.ollama_base_url.rstrip('/')}/api/embeddings"
-    # Keep payloads bounded for throughput
     payload = {"model": model, "prompt": prompt[:8000]}
     timeout = min(60.0, float(settings.ollama_timeout))
-    resp = httpx.post(url, json=payload, timeout=timeout)
-    resp.raise_for_status()
-    data = resp.json()
-    vec = data.get("embedding")
-    if not isinstance(vec, list) or not vec:
-        raise RuntimeError("empty embedding")
-    out = [float(x) for x in vec]
-    with _cache_lock:
-        _dim_cache[model] = len(out)
-    return _l2_normalize(out)
+    last_err: Exception | None = None
+    for attempt in range(2):
+        try:
+            resp = httpx.post(url, json=payload, timeout=timeout)
+            resp.raise_for_status()
+            data = resp.json()
+            vec = data.get("embedding")
+            if not isinstance(vec, list) or not vec:
+                raise RuntimeError("empty embedding")
+            out = [float(x) for x in vec]
+            with _cache_lock:
+                _dim_cache[model] = len(out)
+            return _l2_normalize(out)
+        except Exception as e:
+            last_err = e
+            if attempt == 0:
+                logger.warning("ollama embed retry after error: %s", e)
+                continue
+            raise
+    raise RuntimeError(str(last_err))
 
 
 def _hash_embed(text: str, dim: int) -> list[float]:
@@ -89,14 +141,6 @@ def _hash_embed(text: str, dim: int) -> list[float]:
         sign = 1.0 if (h >> 8) & 1 else -1.0
         vec[idx] += sign
     return _l2_normalize(vec)
-
-
-def _fit_dim(vec: list[float], dim: int) -> list[float]:
-    if len(vec) == dim:
-        return vec
-    if len(vec) > dim:
-        return _l2_normalize(vec[:dim])
-    return _l2_normalize(vec + [0.0] * (dim - len(vec)))
 
 
 def _l2_normalize(vec: list[float]) -> list[float]:

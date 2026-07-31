@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 
+from backend.skills.retrieval.embedder import EmbeddingError
 from backend.skills.retrieval.keyword_search import keyword_search
 from backend.skills.retrieval.vector_search import VectorStore
+
+logger = logging.getLogger(__name__)
 
 
 def hybrid_search(
@@ -21,8 +25,15 @@ def hybrid_search(
     vector_root: Path | None = None,
 ) -> list[dict]:
     kw = keyword_search(conn, query, source_ids=source_ids, top_k=keyword_top_k)
-    store = VectorStore(project_id, root=vector_root)
-    vec = store.search(query, top_k=vector_top_k, source_ids=source_ids)
+    vec: list[dict] = []
+    try:
+        store = VectorStore(project_id, root=vector_root)
+        vec = store.search(query, top_k=vector_top_k, source_ids=source_ids)
+    except EmbeddingError as e:
+        # Do not abort produce/resume when Ollama embeddings are temporarily down.
+        logger.warning(
+            "vector search skipped for %s (FTS-only): %s", project_id, e
+        )
 
     merged: dict[str, dict] = {}
     # Prefer block_id from FTS; vector uses chunk_id — map by page+text head

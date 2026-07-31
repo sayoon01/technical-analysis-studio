@@ -1,0 +1,28 @@
+# Visual rendering — code-owned, agent only emits VisualRequest.
+
+supported_types:
+  - TABLE
+  - COMPARISON_TABLE
+  - BAR_CHART
+  - LINE_CHART
+  - PROCESS_FLOW
+  - ARCHITECTURE_DIAGRAM
+  - TIMELINE
+  - MATRIX
+  - SOURCE_FIGURE
+
+renderers:
+  TABLE: markdown_html
+  COMPARISON_TABLE: markdown_html
+  BAR_CHART: matplotlib
+  LINE_CHART: matplotlib
+  PROCESS_FLOW: mermaid
+  ARCHITECTURE_DIAGRAM: graphviz_or_mermaid
+  TIMELINE: mermaid
+  MATRIX: markdown_html
+  SOURCE_FIGURE: source_crop
+
+rules:
+  chart_requires_quantitative_evidence: true
+  qualitative_must_label: "자료 기반 정성 분석"
+  no_visual_agent: true

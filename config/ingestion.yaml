@@ -1,0 +1,31 @@
+# Ingestion — format handlers are selected by mime/extension, never by topic.
+
+mvp_formats:
+  - pdf
+  - docx
+  - md
+  - txt
+
+phase2_formats:
+  - pptx
+  - hwp
+  - hwpx
+  - xlsx
+  - csv
+
+pdf:
+  render_dpi: 200
+  ocr_fallback: true
+  ocr_min_text_chars: 40
+  always_render_page_types:
+    - DIAGRAM
+    - CHART
+    - MIXED
+    - SCANNED
+    - IMAGE
+    - TABLE
+
+page_classification:
+  # Heuristics only; no domain keywords.
+  diagram_image_ratio_threshold: 0.45
+  table_line_density_threshold: 0.12

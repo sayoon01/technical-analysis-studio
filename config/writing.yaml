@@ -1,0 +1,19 @@
+# Writing policy — domain-agnostic.
+
+citation:
+  format: "[SRC-{source_id}, p.{page}]"
+  require_page_for_metrics: true
+  require_page_for_major_claims: true
+
+style:
+  separate_fact_and_analysis: true
+  forbid_promotional_language: true
+  forbid_unsupported_implementation_detail: true
+  mark_evidence_gaps_explicitly: true
+
+visual_placeholder: "<!-- VISUAL_REQUEST: {visual_type} -->"
+
+previous_edition:
+  # May inform style/structure; must NOT supply new facts.
+  allow_style_reuse: true
+  allow_fact_inheritance_without_evidence: false

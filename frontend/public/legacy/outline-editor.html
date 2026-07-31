@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>목차 편집 — Technical Analysis Studio</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a222c;
+      --line: #2c3a4a;
+      --text: #e7eef6;
+      --muted: #8fa3b8;
+      --accent: #3d9cf0;
+      --ok: #3dbf8a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: "IBM Plex Sans KR", "Noto Sans KR", sans-serif;
+      background: radial-gradient(1200px 600px at 10% -10%, #1a2a3a, var(--bg));
+      color: var(--text); min-height: 100vh;
+    }
+    header {
+      padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--line);
+      display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
+    }
+    header h1 { font-size: 1.1rem; margin: 0; letter-spacing: -0.02em; }
+    header input, header button, .detail button, .detail input, .detail textarea {
+      background: var(--panel); color: var(--text); border: 1px solid var(--line);
+      border-radius: 6px; padding: 0.45rem 0.7rem; font: inherit;
+    }
+    header button, .detail button {
+      background: var(--accent); border-color: transparent; color: #041018; font-weight: 600;
+      cursor: pointer;
+    }
+    button.secondary { background: var(--panel); color: var(--text); border-color: var(--line); }
+    button.ok { background: var(--ok); }
+    main { display: grid; grid-template-columns: 1.1fr 1fr; gap: 0; min-height: calc(100vh - 64px); }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+    .pane { padding: 1rem 1.25rem; border-right: 1px solid var(--line); }
+    .pane h2 { font-size: 0.85rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    .tree { list-style: none; padding: 0; margin: 0; }
+    .tree li {
+      padding: 0.55rem 0.65rem; margin: 0.25rem 0; border-radius: 8px;
+      border: 1px solid transparent; cursor: pointer;
+    }
+    .tree li:hover { background: #243040; }
+    .tree li.active { border-color: var(--accent); background: #1e2d3d; }
+    .tree .lvl2 { margin-left: 1rem; font-size: 0.95rem; color: #c5d4e4; }
+    .meta { color: var(--muted); font-size: 0.85rem; margin-bottom: 0.75rem; }
+    .detail label { display: block; font-size: 0.8rem; color: var(--muted); margin: 0.6rem 0 0.25rem; }
+    .detail input, .detail textarea { width: 100%; }
+    .detail textarea { min-height: 90px; resize: vertical; }
+    .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
+    .status { font-size: 0.85rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Technical Analysis Studio · 목차</h1>
+    <input id="projectId" placeholder="PRJ-..." style="min-width:14rem" />
+    <button type="button" onclick="loadOutline()">불러오기</button>
+    <button type="button" class="secondary" onclick="runAnalyzePlan()">분석→목차 생성</button>
+    <span class="status" id="status"></span>
+  </header>
+  <main>
+    <section class="pane">
+      <h2>Outline</h2>
+      <div class="meta" id="planMeta">프로젝트 ID를 입력하세요</div>
+      <ul class="tree" id="tree"></ul>
+    </section>
+    <section class="pane detail">
+      <h2>Selected node</h2>
+      <label>제목</label>
+      <input id="nodeTitle" />
+      <label>작성 목표</label>
+      <textarea id="nodeObjective"></textarea>
+      <label>분석 질문 (줄바꿈)</label>
+      <textarea id="nodeQuestions"></textarea>
+      <div class="actions">
+        <button type="button" class="secondary" onclick="recommendNode()">목표 재추천</button>
+        <button type="button" class="secondary" onclick="saveOutline()">목차 저장</button>
+        <button type="button" class="ok" onclick="approve()">목차 확정</button>
+      </div>
+      <label>보고서 제목</label>
+      <input id="reportTitle" />
+      <div class="actions">
+        <button type="button" class="secondary" onclick="saveTitle()">제목 저장</button>
+      </div>
+    </section>
+  </main>
+  <script>
+    const API = localStorage.getItem('TAS_API') || 'http://127.0.0.1:8000';
+    let outline = null;
+    let selectedId = null;
+
+    async function api(path, opts = {}) {
+      const res = await fetch(API + path, {
+        headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+        ...opts,
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    function setStatus(msg) { document.getElementById('status').textContent = msg; }
+
+    async function runAnalyzePlan() {
+      const id = document.getElementById('projectId').value.trim();
+      if (!id) return;
+      setStatus('분석 중…');
+      await api(`/api/projects/${id}/analyze`, { method: 'POST' });
+      setStatus('목차 생성 중…');
+      await api(`/api/projects/${id}/plans/generate`, { method: 'POST' });
+      await loadOutline();
+      setStatus('목차 생성 완료 — 승인 대기');
+    }
+
+    async function loadOutline() {
+      const id = document.getElementById('projectId').value.trim();
+      outline = await api(`/api/projects/${id}/outline`);
+      document.getElementById('reportTitle').value = outline.title || '';
+      document.getElementById('planMeta').textContent =
+        `${outline.title || ''} · approved=${outline.approved} · nodes=${outline.nodes.length}`;
+      renderTree();
+    }
+
+    function renderTree() {
+      const ul = document.getElementById('tree');
+      ul.innerHTML = '';
+      for (const n of outline.nodes) {
+        const li = document.createElement('li');
+        li.textContent = `${n.order}. ${n.title}`;
+        if (n.level > 1) li.classList.add('lvl2');
+        if (n.node_id === selectedId) li.classList.add('active');
+        li.onclick = () => selectNode(n.node_id);
+        ul.appendChild(li);
+      }
+    }
+
+    function selectNode(id) {
+      selectedId = id;
+      const n = outline.nodes.find(x => x.node_id === id);
+      document.getElementById('nodeTitle').value = n.title;
+      document.getElementById('nodeObjective').value = n.objective || '';
+      document.getElementById('nodeQuestions').value = (n.analysis_questions || []).join('\n');
+      renderTree();
+    }
+
+    function applyEditorToSelected() {
+      if (!selectedId) return;
+      const n = outline.nodes.find(x => x.node_id === selectedId);
+      n.title = document.getElementById('nodeTitle').value;
+      n.objective = document.getElementById('nodeObjective').value;
+      n.analysis_questions = document.getElementById('nodeQuestions').value
+        .split('\n').map(s => s.trim()).filter(Boolean);
+    }
+
+    async function saveOutline() {
+      applyEditorToSelected();
+      const id = document.getElementById('projectId').value.trim();
+      outline = await api(`/api/projects/${id}/outline`, {
+        method: 'PATCH',
+        body: JSON.stringify({ nodes: outline.nodes }),
+      });
+      setStatus('목차 저장됨');
+      renderTree();
+    }
+
+    async function recommendNode() {
+      if (!selectedId) return;
+      const id = document.getElementById('projectId').value.trim();
+      const n = await api(`/api/projects/${id}/outline/nodes/${selectedId}/recommend`, { method: 'POST' });
+      document.getElementById('nodeObjective').value = n.objective || '';
+      document.getElementById('nodeQuestions').value = (n.analysis_questions || []).join('\n');
+      await loadOutline();
+      selectNode(selectedId);
+      setStatus('노드 재추천 적용');
+    }
+
+    async function saveTitle() {
+      const id = document.getElementById('projectId').value.trim();
+      await api(`/api/projects/${id}/plan`, {
+        method: 'PATCH',
+        body: JSON.stringify({ title: document.getElementById('reportTitle').value }),
+      });
+      setStatus('제목 저장됨');
+      await loadOutline();
+    }
+
+    async function approve() {
+      const id = document.getElementById('projectId').value.trim();
+      await saveOutline();
+      const r = await api(`/api/projects/${id}/outline/approve`, { method: 'POST' });
+      setStatus(`확정 → ${r.stage}`);
+      await loadOutline();
+    }
+  </script>
+</body>
+</html>

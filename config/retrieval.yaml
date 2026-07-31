@@ -1,0 +1,19 @@
+# Hybrid retrieval. Evidence search MUST filter to EVIDENCE_SOURCE only.
+
+keyword_top_k: 20
+vector_top_k: 20
+merged_top_k: 24
+evidence_top_k: 10
+
+allowed_source_roles:
+  - EVIDENCE_SOURCE
+
+# Previous edition content is queried separately — never merged into evidence.
+previous_edition_search:
+  enabled: true
+  top_k: 5
+
+chunking:
+  max_tokens: 400
+  overlap_tokens: 60
+  preserve_page_boundaries: true

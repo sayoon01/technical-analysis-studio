@@ -1,0 +1,41 @@
+# Model routing — no domain-specific prompts here.
+
+providers:
+  default: ollama
+
+models:
+  gemma-default:
+    provider: ollama
+    model_id: gemma4:31b
+    max_tokens: 8192
+  planner-default:
+    provider: ollama
+    model_id: gemma4:31b
+    max_tokens: 8192
+  embed-default:
+    provider: ollama
+    model_id: bge-m3
+    max_tokens: 0
+
+agents:
+  corpus_analyst:
+    model: gemma-default
+    temperature: 0.1
+  report_planner:
+    model: planner-default
+    temperature: 0.3
+  evidence_researcher:
+    model: gemma-default
+    temperature: 0.1
+  technical_writer:
+    model: gemma-default
+    temperature: 0.2
+  technical_reviewer:
+    model: gemma-default
+    temperature: 0.0
+  editorial_reviewer:
+    model: gemma-default
+    temperature: 0.0
+  reviser:
+    model: gemma-default
+    temperature: 0.1

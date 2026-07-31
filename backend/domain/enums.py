@@ -1,0 +1,123 @@
+"""Domain enums for Technical Analysis Studio.
+
+도메인·주제별 분기 금지. 자료에서 발견된 구조만 표현한다.
+"""
+
+from enum import StrEnum
+
+
+class ProjectStage(StrEnum):
+    CREATED = "CREATED"
+    INGESTING = "INGESTING"
+    ANALYZING = "ANALYZING"
+    PLANNING = "PLANNING"
+    WAITING_FOR_OUTLINE_APPROVAL = "WAITING_FOR_OUTLINE_APPROVAL"
+    PRODUCING = "PRODUCING"
+    REVIEWING = "REVIEWING"
+    REVISING = "REVISING"
+    FINALIZING = "FINALIZING"
+    READY_FOR_EXPORT = "READY_FOR_EXPORT"
+    EXPORTED = "EXPORTED"
+    PAUSED = "PAUSED"
+    FAILED = "FAILED"
+
+
+class SourceRole(StrEnum):
+    """사실 근거 / 수정 기반 / 형식 참고를 엄격히 분리."""
+
+    EVIDENCE_SOURCE = "EVIDENCE_SOURCE"
+    PREVIOUS_EDITION = "PREVIOUS_EDITION"
+    FORMAT_REFERENCE = "FORMAT_REFERENCE"
+
+
+class SourceStatus(StrEnum):
+    UPLOADED = "UPLOADED"
+    PROCESSING = "PROCESSING"
+    READY = "READY"
+    FAILED = "FAILED"
+
+
+class PageType(StrEnum):
+    TEXT = "TEXT"
+    TABLE = "TABLE"
+    CHART = "CHART"
+    DIAGRAM = "DIAGRAM"
+    IMAGE = "IMAGE"
+    MIXED = "MIXED"
+    SCANNED = "SCANNED"
+
+
+class EvidenceType(StrEnum):
+    PROBLEM = "PROBLEM"
+    DEFINITION = "DEFINITION"
+    ARCHITECTURE = "ARCHITECTURE"
+    PROCESS = "PROCESS"
+    METRIC = "METRIC"
+    QUALITATIVE = "QUALITATIVE"
+    CONSTRAINT = "CONSTRAINT"
+    COMPARISON = "COMPARISON"
+
+
+class MetricDirection(StrEnum):
+    INCREASE = "INCREASE"
+    DECREASE = "DECREASE"
+    UNCHANGED = "UNCHANGED"
+
+
+class VerificationStatus(StrEnum):
+    VERIFIED = "VERIFIED"
+    REQUIRES_VISUAL_CHECK = "REQUIRES_VISUAL_CHECK"
+    UNVERIFIED = "UNVERIFIED"
+    CONFLICTING = "CONFLICTING"
+    REJECTED = "REJECTED"
+
+
+class ImpactDecision(StrEnum):
+    KEEP = "KEEP"
+    UPDATE_CITATION = "UPDATE_CITATION"
+    LIGHT_EDIT = "LIGHT_EDIT"
+    PARTIAL_REWRITE = "PARTIAL_REWRITE"
+    FULL_REWRITE = "FULL_REWRITE"
+    ADD_SECTION = "ADD_SECTION"
+    REMOVE_SECTION = "REMOVE_SECTION"
+
+
+class ClaimRelation(StrEnum):
+    SUPPORTS = "SUPPORTS"
+    EXTENDS = "EXTENDS"
+    CONTRADICTS = "CONTRADICTS"
+    REPLACES = "REPLACES"
+
+
+class ReviewDecision(StrEnum):
+    PASS = "PASS"
+    REVISE = "REVISE"
+    MANUAL_REVIEW = "MANUAL_REVIEW"
+
+
+class IssueSeverity(StrEnum):
+    CRITICAL = "CRITICAL"
+    MAJOR = "MAJOR"
+    MINOR = "MINOR"
+
+
+class VisualType(StrEnum):
+    TABLE = "TABLE"
+    COMPARISON_TABLE = "COMPARISON_TABLE"
+    BAR_CHART = "BAR_CHART"
+    LINE_CHART = "LINE_CHART"
+    PROCESS_FLOW = "PROCESS_FLOW"
+    ARCHITECTURE_DIAGRAM = "ARCHITECTURE_DIAGRAM"
+    TIMELINE = "TIMELINE"
+    MATRIX = "MATRIX"
+    SOURCE_FIGURE = "SOURCE_FIGURE"
+
+
+class EditionStatus(StrEnum):
+    DRAFT = "DRAFT"
+    PRODUCING = "PRODUCING"
+    IN_REVIEW = "IN_REVIEW"
+    FINALIZING = "FINALIZING"
+    READY = "READY"
+    EXPORTED = "EXPORTED"
+    FAILED = "FAILED"

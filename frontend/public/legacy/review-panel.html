@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>검토 — Technical Analysis Studio</title>
+  <style>
+    :root { --bg:#10161d; --panel:#1a232d; --line:#2b3a4a; --text:#e8eef5; --muted:#8da0b3; --bad:#e35d6a; --ok:#3dbf8a; --accent:#4aa3f0; }
+    *{box-sizing:border-box} body{margin:0;font-family:"IBM Plex Sans KR",sans-serif;background:var(--bg);color:var(--text)}
+    header{padding:1rem 1.25rem;border-bottom:1px solid var(--line);display:flex;gap:.75rem;flex-wrap:wrap;align-items:center}
+    h1{font-size:1.05rem;margin:0} input,button{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.45rem .7rem;font:inherit}
+    button{background:var(--accent);border:0;color:#041018;font-weight:600;cursor:pointer}
+    main{display:grid;grid-template-columns:280px 1fr 320px;min-height:calc(100vh - 64px)}
+    @media(max-width:1000px){main{grid-template-columns:1fr}}
+    .pane{padding:1rem;border-right:1px solid var(--line)}
+    .sec{padding:.5rem .6rem;margin:.3rem 0;border-radius:8px;cursor:pointer;border:1px solid transparent}
+    .sec:hover,.sec.active{background:#243140;border-color:var(--accent)}
+    .badge{font-size:.75rem;padding:.1rem .4rem;border-radius:999px;background:#2a3848}
+    .badge.bad{background:var(--bad);color:#fff}.badge.ok{background:var(--ok);color:#041018}
+    pre{white-space:pre-wrap;background:var(--panel);padding:1rem;border-radius:8px;border:1px solid var(--line);max-height:70vh;overflow:auto}
+    .issue{border:1px solid var(--line);border-radius:8px;padding:.6rem;margin:.4rem 0;background:var(--panel)}
+    .issue.CRITICAL{border-color:var(--bad)} .muted{color:var(--muted);font-size:.85rem}
+  </style>
+</head>
+<body>
+<header>
+  <h1>검토 / 수정</h1>
+  <input id="editionId" placeholder="ED-..." style="min-width:14rem" />
+  <button onclick="loadEdition()">불러오기</button>
+  <button onclick="runReview()">Edition 검토 실행</button>
+  <span class="muted" id="status"></span>
+</header>
+<main>
+  <section class="pane"><h3 class="muted">Sections</h3><div id="list"></div></section>
+  <section class="pane"><h3 class="muted">본문</h3><pre id="body"></pre></section>
+  <section class="pane"><h3 class="muted">이슈</h3><div id="issues"></div></section>
+</main>
+<script>
+const API = localStorage.getItem('TAS_API') || 'http://127.0.0.1:8000';
+let edition = null, selected = null;
+async function api(path, opts={}) {
+  const r = await fetch(API+path, {headers:{'Content-Type':'application/json'},...opts});
+  if(!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+function setStatus(m){document.getElementById('status').textContent=m}
+async function loadEdition(){
+  const id=document.getElementById('editionId').value.trim();
+  edition=await api(`/api/editions/${id}`);
+  renderList(); setStatus(`sections=${edition.sections.length}`);
+}
+function renderList(){
+  const el=document.getElementById('list'); el.innerHTML='';
+  for(const s of edition.sections){
+    const d=document.createElement('div'); d.className='sec'+(selected===s.section_id?' active':'');
+    d.innerHTML=`<div>${s.title}</div><span class="badge ${s.status==='PASSED'?'ok':(s.status==='MANUAL_REVIEW'?'bad':'')}">${s.status}</span>`;
+    d.onclick=()=>selectSection(s.section_id); el.appendChild(d);
+  }
+}
+async function selectSection(id){
+  selected=id; renderList();
+  const s=await api(`/api/sections/${id}`);
+  document.getElementById('body').textContent=s.content_markdown||'';
+  const issues=await api(`/api/sections/${id}/issues`);
+  const box=document.getElementById('issues'); box.innerHTML='';
+  if(!issues.length){box.innerHTML='<div class="muted">열린 이슈 없음</div>';return}
+  for(const i of issues){
+    const d=document.createElement('div'); d.className='issue '+i.severity;
+    d.innerHTML=`<strong>${i.issue_type}</strong> <span class="badge">${i.severity}</span><div>${i.description}</div><div class="muted">${i.recommendation}</div>`;
+    box.appendChild(d);
+  }
+}
+async function runReview(){
+  const id=document.getElementById('editionId').value.trim();
+  setStatus('검토 중…');
+  const r=await api(`/api/editions/${id}/review`,{method:'POST'});
+  setStatus(`done all_passed=${r.all_passed} stage=${r.stage}`);
+  await loadEdition();
+}
+</script>
+</body>
+</html>

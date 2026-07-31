@@ -1,0 +1,34 @@
+# Export bundle per edition.
+
+formats:
+  - markdown
+  - docx
+  - pdf
+  - zip
+
+bundle:
+  - report.md
+  - report.docx
+  - report.pdf
+  - claim-evidence-ledger.xlsx
+  - source-index.json
+  - outline.json
+  - review-summary.json
+  - edition-diff.json
+  - visuals/
+
+pipeline:
+  - assemble_sections
+  - number_headings
+  - number_figures_tables
+  - format_citations
+  - build_references
+  - render_html
+  - export_pdf
+  - pandoc_docx
+  - package_zip
+
+docx:
+  via: pandoc
+pdf:
+  via: weasyprint_or_chromium

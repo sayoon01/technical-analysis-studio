@@ -1,0 +1,25 @@
+# Review loop — hard gates, not LLM vanity scores.
+
+max_revisions: 3
+manual_review_after_limit: true
+
+parallel_reviewers:
+  - technical
+  - editorial
+
+quality_gate:
+  blockers:
+    unsupported_major_claims: 0
+    broken_citations: 0
+    numeric_mismatches: 0
+    unresolved_critical_issues: 0
+    unrendered_visual_requests: 0
+  limits:
+    maximum_revision_count: 3
+    duplicate_paragraph_ratio: 0.10
+    uncited_major_claim_ratio: 0.02
+
+# LLM numeric scores are advisory only.
+advisory_scores:
+  enabled: true
+  never_override_blockers: true

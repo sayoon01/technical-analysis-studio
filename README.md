@@ -1,7 +1,7 @@
 # Technical Analysis Studio
+<img width="1348" height="1179" alt="image" src="https://github.com/user-attachments/assets/0728a465-6c43-4dc2-a41b-476f31d4136c" />
 
 **전문가 기술분석서** 생성 시스템 (Ollama agents + deterministic skills).  
-Book Studio와 무관한 신규 프로젝트입니다.
 
 설계 문서: [docs/DESIGN.md](docs/DESIGN.md) · [docs/API.md](docs/API.md) · [docs/UI.md](docs/UI.md) · [docs/TESTING.md](docs/TESTING.md)
 

@@ -68,9 +68,9 @@ class PlanService:
         self.planning_pipeline = PlanningPipeline(conn, llm_mode=llm_mode)
 
     def generation_status(self, project_id: str) -> dict:
-        if not self.projects.get(project_id):
-            raise KeyError(project_id)
         project = self.projects.get(project_id)
+        if not project:
+            raise KeyError(project_id)
         job = _get_job(project_id)
         lock = _lock_for(project_id)
         busy = lock.locked() or bool(job)

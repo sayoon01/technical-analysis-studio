@@ -18,9 +18,12 @@ def db_path_from_url(url: str | None = None) -> Path:
 def connect(path: Path | None = None) -> sqlite3.Connection:
     db_path = path or db_path_from_url()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    # timeout: wait on lock instead of failing under concurrent writers
+    conn = sqlite3.connect(str(db_path), timeout=30.0, check_same_thread=True)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     return conn
 
 

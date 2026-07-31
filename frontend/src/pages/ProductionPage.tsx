@@ -20,6 +20,7 @@ export default function ProductionPage() {
   const [interrupted, setInterrupted] = useState(false);
   const localRun = useRef(false);
   const resumeRun = useRef(false);
+  const sectionIdRef = useRef("");
 
   const working = busy || jobPhase === "producing" || jobPhase === "reviewing";
 
@@ -41,12 +42,23 @@ export default function ProductionPage() {
     return interrupted || incomplete;
   })();
 
+  useEffect(() => {
+    sectionIdRef.current = sectionId;
+  }, [sectionId]);
+
   async function loadEdition(id: string) {
     const ed = await api.getEdition(id);
     setEdition(ed);
     setEditionId(ed.edition_id);
-    const first = ed.sections?.[0];
-    if (first) setSectionId(first.section_id);
+    const prefer = sectionIdRef.current;
+    const keep =
+      prefer && ed.sections?.some((s) => s.section_id === prefer) ? prefer : "";
+    if (keep) {
+      setSectionId(keep);
+    } else {
+      const first = ed.sections?.[0];
+      if (first) setSectionId(first.section_id);
+    }
   }
 
   useEffect(() => {

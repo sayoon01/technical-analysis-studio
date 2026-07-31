@@ -5,7 +5,8 @@ from __future__ import annotations
 import sqlite3
 
 from backend.orchestration.review_loop import ReviewLoop
-from backend.storage.edition_repository import SectionRepository
+from backend.services.job_status import lock_for, set_job
+from backend.storage.edition_repository import EditionRepository, SectionRepository
 from backend.storage.review_repository import ReviewRepository
 
 
@@ -20,9 +21,22 @@ class ReviewService:
         self.loop = ReviewLoop(conn, llm_mode=llm_mode)
         self.reviews = ReviewRepository(conn)
         self.sections = SectionRepository(conn)
+        self.editions = EditionRepository(conn)
 
     def review_edition(self, edition_id: str) -> dict:
-        return self.loop.run_edition(edition_id)
+        edition = self.editions.get(edition_id)
+        if not edition:
+            raise KeyError(edition_id)
+        project_id = edition["project_id"]
+        lock = lock_for(project_id)
+        if not lock.acquire(blocking=False):
+            raise ValueError("A job is already running for this project")
+        set_job(project_id, "reviewing")
+        try:
+            return self.loop.run_edition(edition_id)
+        finally:
+            set_job(project_id, None)
+            lock.release()
 
     def review_section(self, section_id: str) -> dict:
         return self.loop.run_section(section_id)

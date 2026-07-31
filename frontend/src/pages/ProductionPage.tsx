@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { Claim, Edition, Section } from "../types";
 import { useWorkspace } from "../workspace";
+
+type JobPhase = "producing" | "reviewing" | "analyzing" | "planning" | null;
 
 export default function ProductionPage() {
   const { projectId, editionId, setEditionId } = useWorkspace();
@@ -13,6 +15,31 @@ export default function ProductionPage() {
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [jobPhase, setJobPhase] = useState<JobPhase>(null);
+  const [jobLabel, setJobLabel] = useState("");
+  const [interrupted, setInterrupted] = useState(false);
+  const localRun = useRef(false);
+  const resumeRun = useRef(false);
+
+  const working = busy || jobPhase === "producing" || jobPhase === "reviewing";
+
+  const canResume = (() => {
+    if (!editionId || !edition) return false;
+    const st = (edition.status || "").toUpperCase();
+    if (st && !["PRODUCING", "DRAFT", "IN_REVIEW"].includes(st) && !interrupted) {
+      return false;
+    }
+    const secs = edition.sections || [];
+    if (!secs.length) return interrupted;
+    const incomplete = secs.some((s) => {
+      const ss = (s.status || "").toUpperCase();
+      if (["RESEARCHING", "WRITING", "REVISING", "PENDING", "FAILED"].includes(ss))
+        return true;
+      return !(s.content_markdown || "").trim() || (s.content_markdown || "").trim().length < 40;
+    });
+    // Missing later outline chapters: fewer sections than expected still resumable
+    return interrupted || incomplete;
+  })();
 
   async function loadEdition(id: string) {
     const ed = await api.getEdition(id);
@@ -47,9 +74,64 @@ export default function ProductionPage() {
     setClaimLoc(null);
   }, [sectionId]);
 
-  async function produce() {
+  useEffect(() => {
     if (!projectId) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    let sawBusy = false;
+
+    async function poll() {
+      try {
+        const st = await api.getStatus(projectId!);
+        if (cancelled) return;
+        const phase = (st.phase || null) as JobPhase;
+        const running =
+          !!(st.busy && (phase === "producing" || phase === "reviewing"));
+        setInterrupted(!!st.interrupted && !running);
+        if (running) {
+          sawBusy = true;
+          setJobPhase(phase);
+          setJobLabel(st.label || "");
+          if (st.current_edition_id && st.current_edition_id !== editionId) {
+            setEditionId(st.current_edition_id);
+          } else if (st.current_edition_id) {
+            await loadEdition(st.current_edition_id).catch(() => null);
+          }
+        } else if (!localRun.current) {
+          setJobPhase(null);
+          setJobLabel("");
+          if (sawBusy) {
+            sawBusy = false;
+            const eid = st.current_edition_id || editionId;
+            if (eid) await loadEdition(eid).catch(() => null);
+            setMsg(
+              phase === "reviewing" || st.stage === "READY_FOR_EXPORT"
+                ? "작성·검토 완료"
+                : "작성 작업 완료",
+            );
+            setBusy(false);
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+      if (!cancelled) timer = window.setTimeout(poll, 2500);
+    }
+
+    poll();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [projectId]);
+
+  async function produce() {
+    if (!projectId || working) return;
+    localRun.current = true;
+    resumeRun.current = false;
     setBusy(true);
+    setJobPhase("producing");
+    setJobLabel("보고서 작성 중 (Ollama) — 장 수에 따라 오래 걸릴 수 있습니다");
     setErr("");
     setMsg("");
     try {
@@ -65,16 +147,72 @@ export default function ProductionPage() {
       } else {
         setMsg("작성 완료");
       }
+      setInterrupted(false);
+      setJobPhase(null);
+      setJobLabel("");
     } catch (e) {
-      setErr(String((e as Error).message || e));
+      const text = String((e as Error).message || e);
+      if (/already running/i.test(text)) {
+        setMsg("이미 작성/검토 중입니다. 완료되면 자동으로 갱신됩니다.");
+      } else {
+        setErr(text);
+        setJobPhase(null);
+        setJobLabel("");
+      }
     } finally {
+      localRun.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function resumeProduce() {
+    if (!editionId || working) return;
+    localRun.current = true;
+    resumeRun.current = true;
+    setBusy(true);
+    setJobPhase("producing");
+    setJobLabel(
+      "이어쓰기 중 — 완성된 장은 유지하고 남은 장만 작성합니다 (Ollama)",
+    );
+    setErr("");
+    setMsg("");
+    setInterrupted(false);
+    try {
+      const res = await api.resumeProduce(editionId);
+      const id = String((res as { edition_id?: string }).edition_id || editionId);
+      await loadEdition(id);
+      const skipped = (res as { skipped?: number }).skipped;
+      const rewritten = (res as { rewritten?: number }).rewritten;
+      setMsg(
+        `이어쓰기 완료: ${id}` +
+          (skipped != null || rewritten != null
+            ? ` (유지 ${skipped ?? "—"} · 작성 ${rewritten ?? "—"})`
+            : ""),
+      );
+      setJobPhase(null);
+      setJobLabel("");
+    } catch (e) {
+      const text = String((e as Error).message || e);
+      if (/already running/i.test(text)) {
+        setMsg("이미 작성/검토 중입니다. 완료되면 자동으로 갱신됩니다.");
+      } else {
+        setErr(text);
+        setJobPhase(null);
+        setJobLabel("");
+        setInterrupted(true);
+      }
+    } finally {
+      localRun.current = false;
       setBusy(false);
     }
   }
 
   async function review() {
-    if (!editionId) return;
+    if (!editionId || working) return;
+    localRun.current = true;
     setBusy(true);
+    setJobPhase("reviewing");
+    setJobLabel("검토 중 (Ollama) — 수 분 걸릴 수 있습니다");
     setErr("");
     setMsg("");
     try {
@@ -87,9 +225,19 @@ export default function ProductionPage() {
         setIssues(await api.sectionIssues(sectionId));
         setSection(await api.getSection(sectionId));
       }
+      setJobPhase(null);
+      setJobLabel("");
     } catch (e) {
-      setErr(String((e as Error).message || e));
+      const text = String((e as Error).message || e);
+      if (/already running/i.test(text)) {
+        setMsg("이미 작업 중입니다. 완료되면 자동으로 갱신됩니다.");
+      } else {
+        setErr(text);
+        setJobPhase(null);
+        setJobLabel("");
+      }
     } finally {
+      localRun.current = false;
       setBusy(false);
     }
   }
@@ -112,6 +260,9 @@ export default function ProductionPage() {
     );
   }
 
+  const bannerTitle =
+    jobPhase === "reviewing" ? "검토 중" : jobPhase === "producing" ? "작성 중" : "작업 중";
+
   return (
     <div>
       <h1 className="page-title">작성·검토</h1>
@@ -121,15 +272,58 @@ export default function ProductionPage() {
       </p>
 
       <div className="row" style={{ marginBottom: "0.9rem" }}>
-        <button type="button" disabled={busy} onClick={produce}>
-          작성 실행
+        <button type="button" disabled={working} onClick={produce}>
+          {jobPhase === "producing" && !resumeRun.current
+            ? "작성 중…"
+            : "작성 실행"}
         </button>
-        <button type="button" className="secondary" disabled={busy || !editionId} onClick={review}>
-          검토 실행
+        <button
+          type="button"
+          disabled={working || !canResume}
+          onClick={resumeProduce}
+          title="완성된 장은 유지하고 남은 장만 이어서 작성"
+        >
+          {jobPhase === "producing" && resumeRun.current
+            ? "이어쓰는 중…"
+            : "이어쓰기"}
         </button>
-        {msg && <span className="okmsg">{msg}</span>}
+        <button
+          type="button"
+          className="secondary"
+          disabled={working || !editionId}
+          onClick={review}
+        >
+          {jobPhase === "reviewing" ? "검토 중…" : "검토 실행"}
+        </button>
+        {msg && !working && <span className="okmsg">{msg}</span>}
         {err && <span className="err">{err}</span>}
       </div>
+
+      {interrupted && !working && (
+        <div className="progress-banner" role="status" style={{ opacity: 0.95 }}>
+          <span className="progress-dot" aria-hidden />
+          <div>
+            <strong>이전 작성 중단됨</strong>
+            <div className="muted" style={{ marginTop: "0.15rem" }}>
+              「이어쓰기」로 완성된 장을 유지한 채 이어서 작성하세요. 「작성 실행」은
+              새 Edition을 처음부터 만듭니다.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {working && (
+        <div className="progress-banner" role="status" aria-live="polite">
+          <span className="progress-dot" aria-hidden />
+          <div>
+            <strong>{bannerTitle}</strong>
+            <div className="muted" style={{ marginTop: "0.15rem" }}>
+              {jobLabel ||
+                "Ollama로 장별 근거 수집·작성·검토 중입니다. 다른 메뉴로 이동해도 계속 실행됩니다."}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="panes-3">
         <section className="pane">
@@ -148,7 +342,9 @@ export default function ProductionPage() {
               </div>
             ))}
             {!edition?.sections?.length && (
-              <div className="muted">작성을 실행하세요</div>
+              <div className="muted">
+                {working ? "작성 시작됨 — 장이 하나씩 채워집니다" : "작성을 실행하세요"}
+              </div>
             )}
           </div>
         </section>

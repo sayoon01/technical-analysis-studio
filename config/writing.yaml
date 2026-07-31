@@ -6,8 +6,12 @@ citation:
   require_page_for_major_claims: true
 
 style:
+  # Facts vs analysis: facts need evidence; analysis/interpretation/limitations are allowed.
   separate_fact_and_analysis: true
+  allow_evidence_based_analysis: true
+  allow_explicit_limitations: true
   forbid_promotional_language: true
+  # Invented implementation detail stated as fact (not analysis) is forbidden.
   forbid_unsupported_implementation_detail: true
   mark_evidence_gaps_explicitly: true
 

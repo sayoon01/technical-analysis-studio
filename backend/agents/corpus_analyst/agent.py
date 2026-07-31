@@ -31,7 +31,8 @@ class CorpusAnalystAgent:
             }
             user = (
                 "Analyze the following corpus context and return CorpusAnalysis JSON.\n"
-                "Do not invent facts not supported by the pages/metrics.\n"
+                "Do not invent unsupported facts, numbers, or pages. "
+                "Analysis and limitations are allowed when clearly marked.\n"
                 "Keep lists short (max 12 items each).\n\n"
                 f"{json.dumps(pack, ensure_ascii=False)}"
             )

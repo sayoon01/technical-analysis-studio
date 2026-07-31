@@ -1,16 +1,37 @@
-"""EvidenceResearcherAgent."""
+"""EvidenceResearcherAgent.
+
+Code builds the EvidencePack (retrieval + structured facts). The LLM never
+regenerates the full pack — optional small EvidenceRefineDelta only.
+"""
 
 from __future__ import annotations
 
 import json
+import logging
+import os
 import sqlite3
 from pathlib import Path
 
 from backend.agents.prompt_loader import load_agent_instruction
 from backend.config import settings
-from backend.domain.evidence import EvidencePack
-from backend.model_providers.base import LlmError, allow_offline_fallback, generate_structured
+from backend.domain.evidence import EvidencePack, EvidenceRefineDelta
+from backend.model_providers.base import LlmError, generate_structured
 from backend.skills.retrieval.evidence_builder import build_evidence_pack
+from backend.skills.retrieval.evidence_refine import (
+    apply_evidence_refine_delta,
+    evidence_catalog_for_llm,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _refine_mode() -> str:
+    """off | delta — default off (retrieval pack → writer)."""
+    raw = (
+        os.getenv("TAS_EVIDENCE_REFINE", getattr(settings, "evidence_refine_mode", "off"))
+        or "off"
+    )
+    return str(raw).lower().strip()
 
 
 class EvidenceResearcherAgent:
@@ -52,30 +73,57 @@ class EvidenceResearcherAgent:
         if previous_section_content:
             pack.reuse_decision = "STYLE_ONLY"
 
-        if self.llm_mode == "offline":
+        # Refine is quality enhancement only — never block production.
+        if self.llm_mode == "offline" or _refine_mode() != "delta":
             return pack
 
         try:
-            instruction = load_agent_instruction("evidence_researcher")
-            user = (
-                "Refine this EvidencePack. Keep only EVIDENCE_SOURCE facts. "
-                "Do not invent pages. You may re-rank, drop weak items, fill missing_evidence.\n\n"
-                f"{pack.model_dump_json()}"
+            return self._apply_delta_refine(
+                pack,
+                section_id=section_id,
+                title=title,
+                objective=objective,
             )
-            refined = generate_structured(
-                EvidencePack,
+        except Exception as e:
+            logger.warning(
+                "evidence refine delta skipped section=%s err=%s", section_id, e
+            )
+            return pack
+
+    def _apply_delta_refine(
+        self,
+        pack: EvidencePack,
+        *,
+        section_id: str,
+        title: str,
+        objective: str,
+    ) -> EvidencePack:
+        catalog = evidence_catalog_for_llm(pack)
+        if not catalog:
+            return pack
+
+        instruction = load_agent_instruction("evidence_researcher")
+        user = {
+            "section_id": section_id,
+            "title": title,
+            "objective": objective,
+            "research_questions": pack.research_questions,
+            "candidates": catalog,
+            "instructions": (
+                "Select/rank/drop by id only. Do not invent ids, pages, or statements. "
+                "Return EvidenceRefineDelta JSON only."
+            ),
+        }
+        try:
+            delta = generate_structured(
+                EvidenceRefineDelta,
                 instruction,
-                user,
+                json.dumps(user, ensure_ascii=False)[:14000],
                 agent_name="evidence_researcher",
+                max_retries=1,
             )
-            refined.section_id = section_id
-            refined.previous_section_content = previous_section_content
-            return refined
-        except LlmError:
-            if not allow_offline_fallback():
-                raise
+        except LlmError as e:
+            logger.warning("evidence refine LLM failed section=%s err=%s", section_id, e)
             return pack
-        except Exception:
-            if not allow_offline_fallback():
-                raise
-            return pack
+
+        return apply_evidence_refine_delta(pack, delta)

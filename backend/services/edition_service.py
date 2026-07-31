@@ -10,6 +10,7 @@ from backend.orchestration.edition_diff import EditionDiffer
 from backend.orchestration.impact_analyzer import ImpactAnalyzer
 from backend.orchestration.production_pipeline import ProductionPipeline
 from backend.orchestration.review_loop import ReviewLoop
+from backend.services.job_status import lock_for, set_job
 from backend.storage.edition_repository import (
     ClaimRepository,
     EditionRepository,
@@ -54,20 +55,47 @@ class EditionService:
         parent_edition_id: str | None = None,
         *,
         auto_review: bool = True,
+        new_source_ids: list[str] | None = None,
+        resume_edition_id: str | None = None,
     ) -> dict:
-        if parent_edition_id:
-            result = self.improve(project_id, parent_edition_id)
-        else:
-            result = self.pipeline.run(project_id, parent_edition_id=None)
-        if auto_review and result.get("edition_id"):
-            review = self.review_loop.run_edition(result["edition_id"])
-            result["review"] = {
-                "stage": review.get("stage"),
-                "all_passed": review.get("all_passed"),
-                "manual_review": review.get("manual_review"),
-            }
-            result["stage"] = review.get("stage") or result.get("stage")
-        return result
+        lock = lock_for(project_id)
+        if not lock.acquire(blocking=False):
+            raise ValueError("Production already running for this project")
+        set_job(project_id, "producing")
+        try:
+            if resume_edition_id:
+                result = self.pipeline.run_resume(project_id, resume_edition_id)
+            elif parent_edition_id:
+                result = self.improve(
+                    project_id,
+                    parent_edition_id,
+                    new_source_ids=new_source_ids,
+                )
+            else:
+                result = self.pipeline.run(project_id, parent_edition_id=None)
+            if auto_review and result.get("edition_id"):
+                set_job(project_id, "reviewing")
+                review = self.review_loop.run_edition(result["edition_id"])
+                result["review"] = {
+                    "stage": review.get("stage"),
+                    "all_passed": review.get("all_passed"),
+                    "manual_review": review.get("manual_review"),
+                }
+                result["stage"] = review.get("stage") or result.get("stage")
+            return result
+        finally:
+            set_job(project_id, None)
+            lock.release()
+
+    def resume(self, edition_id: str, *, auto_review: bool = True) -> dict:
+        edition = self.editions.get(edition_id)
+        if not edition:
+            raise KeyError(edition_id)
+        return self.produce(
+            edition["project_id"],
+            resume_edition_id=edition_id,
+            auto_review=auto_review,
+        )
 
     def improve(
         self,

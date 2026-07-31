@@ -1,6 +1,7 @@
 """Corpus analysis and report planning schemas.
 
 목차·제목은 자료에서 도출한다. 주제별 고정 템플릿을 두지 않는다.
+장 목표는 근거 있는 사실 + 분석 + 한계 명시를 지시한다.
 """
 
 from __future__ import annotations

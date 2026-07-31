@@ -144,7 +144,8 @@ Writer에게 원본 전체를 열어주지 않는다.
 ### TechnicalWriter
 
 Plan + Outline + Evidence Pack + 문체/인용 정책 + 앞·뒤 장 맥락 + (선택) 이전 장.  
-Evidence에 없는 핵심 사실 금지. 수치에 출처 페이지. 사실/분석 구분. 미확인은 명시.
+사실·수치는 Evidence 근거 필수. 분석·해석·시사점·한계 명시는 허용하되 사실과 구분.  
+Evidence에 없는 핵심 사실·수치·구현 세부 단정 금지. 수치에 출처 페이지. 미확인은 명시.
 
 ### Reviewers (병렬)
 
@@ -161,7 +162,7 @@ Evidence에 없는 핵심 사실 금지. 수치에 출처 페이지. 사실/분�
 
 LLM 점수는 참고. 아래가 blocker:
 
-- unsupported major claims = 0  
+- unsupported major claims = 0 (날조·무근거 **사실** 단정; 명시된 분석 문단은 해당 없음)  
 - broken citations = 0  
 - numeric mismatches = 0  
 - unresolved critical issues = 0  

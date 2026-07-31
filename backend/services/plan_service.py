@@ -3,53 +3,20 @@
 from __future__ import annotations
 
 import sqlite3
-import threading
-from datetime import datetime, timezone
 
 from backend.domain.enums import ProjectStage
 from backend.domain.report_plan import OutlineNode
 from backend.orchestration.analysis_pipeline import AnalysisPipeline
 from backend.orchestration.planning_pipeline import PlanningPipeline
 from backend.orchestration.state_machine import assert_transition
+from backend.services.job_status import (
+    PHASE_LABELS,
+    get_job,
+    lock_for,
+    set_job,
+)
 from backend.storage.plan_repository import AnalysisRepository, PlanRepository
 from backend.storage.repositories import ProjectRepository
-
-_analyze_locks: dict[str, threading.Lock] = {}
-_analyze_locks_guard = threading.Lock()
-_jobs: dict[str, dict] = {}
-_jobs_guard = threading.Lock()
-
-_PHASE_LABELS = {
-    "analyzing": "자료 분석 중 (Ollama) — 수 분 걸릴 수 있습니다",
-    "planning": "목차 생성 중 (Ollama) — 수 분 걸릴 수 있습니다",
-}
-
-
-def _lock_for(project_id: str) -> threading.Lock:
-    with _analyze_locks_guard:
-        if project_id not in _analyze_locks:
-            _analyze_locks[project_id] = threading.Lock()
-        return _analyze_locks[project_id]
-
-
-def _set_job(project_id: str, phase: str | None) -> None:
-    with _jobs_guard:
-        if phase is None:
-            _jobs.pop(project_id, None)
-            return
-        prev = _jobs.get(project_id) or {}
-        _jobs[project_id] = {
-            "phase": phase,
-            "label": _PHASE_LABELS.get(phase, phase),
-            "started_at": prev.get("started_at")
-            or datetime.now(timezone.utc).isoformat(),
-        }
-
-
-def _get_job(project_id: str) -> dict | None:
-    with _jobs_guard:
-        job = _jobs.get(project_id)
-        return dict(job) if job else None
 
 
 class PlanService:
@@ -71,8 +38,11 @@ class PlanService:
         project = self.projects.get(project_id)
         if not project:
             raise KeyError(project_id)
-        job = _get_job(project_id)
-        lock = _lock_for(project_id)
+        job = get_job(project_id)
+        lock = lock_for(project_id)
+        # Only live in-process jobs count as busy. DB stage/edition status can
+        # remain PRODUCING after server restart; treating that as busy falsely
+        # locks the UI and pretends writing is still running.
         busy = lock.locked() or bool(job)
         phase = (job or {}).get("phase")
         if not phase and busy:
@@ -81,24 +51,39 @@ class PlanService:
                 phase = "analyzing"
             elif stage == ProjectStage.PLANNING.value:
                 phase = "planning"
+            elif stage == ProjectStage.PRODUCING.value:
+                phase = "producing"
+            elif stage == ProjectStage.REVIEWING.value:
+                phase = "reviewing"
+        interrupted = False
+        if not busy and project["stage"] == ProjectStage.PRODUCING.value:
+            eid = project.get("current_edition_id")
+            if eid:
+                row = self.conn.execute(
+                    "SELECT status FROM report_editions WHERE edition_id = ?",
+                    (eid,),
+                ).fetchone()
+                if row and row["status"] == "PRODUCING":
+                    interrupted = True
         return {
             "project_id": project_id,
             "stage": project["stage"],
             "busy": busy,
             "phase": phase,
             "label": (job or {}).get("label")
-            or (_PHASE_LABELS.get(phase or "") if phase else None),
+            or (PHASE_LABELS.get(phase or "") if phase else None),
             "started_at": (job or {}).get("started_at"),
             "current_edition_id": project.get("current_edition_id"),
+            "interrupted": interrupted,
         }
 
     def analyze(self, project_id: str) -> dict:
         if not self.projects.get(project_id):
             raise KeyError(project_id)
-        lock = _lock_for(project_id)
+        lock = lock_for(project_id)
         if not lock.acquire(blocking=False):
             raise ValueError("Analysis already running for this project")
-        _set_job(project_id, "analyzing")
+        set_job(project_id, "analyzing")
         try:
             # Allow analyze from ANALYZING or after ingest
             project = self.projects.get(project_id)
@@ -117,16 +102,16 @@ class PlanService:
                 self.projects.update_stage(project_id, ProjectStage.ANALYZING.value)
             return self.analysis_pipeline.run(project_id)
         finally:
-            _set_job(project_id, None)
+            set_job(project_id, None)
             lock.release()
 
     def generate_plan(self, project_id: str) -> dict:
         if not self.projects.get(project_id):
             raise KeyError(project_id)
-        lock = _lock_for(project_id)
+        lock = lock_for(project_id)
         if not lock.acquire(blocking=False):
             raise ValueError("Outline generation already running for this project")
-        _set_job(project_id, "planning")
+        set_job(project_id, "planning")
         try:
             project = self.projects.get(project_id)
             if project["stage"] not in {
@@ -136,21 +121,21 @@ class PlanService:
             }:
                 # ensure analysis exists
                 if not self.analyses.latest(project_id):
-                    _set_job(project_id, "analyzing")
+                    set_job(project_id, "analyzing")
                     self.analysis_pipeline.run(project_id)
-                    _set_job(project_id, "planning")
+                    set_job(project_id, "planning")
                 else:
                     self.projects.update_stage(project_id, ProjectStage.PLANNING.value)
             elif project["stage"] == ProjectStage.ANALYZING.value:
                 if not self.analyses.latest(project_id):
-                    _set_job(project_id, "analyzing")
+                    set_job(project_id, "analyzing")
                     self.analysis_pipeline.run(project_id)
-                    _set_job(project_id, "planning")
+                    set_job(project_id, "planning")
                 else:
                     self.projects.update_stage(project_id, ProjectStage.PLANNING.value)
             return self.planning_pipeline.run(project_id)
         finally:
-            _set_job(project_id, None)
+            set_job(project_id, None)
             lock.release()
 
     def get_analysis(self, project_id: str) -> dict:
@@ -197,13 +182,16 @@ class PlanService:
         if not target:
             raise KeyError(node_id)
         analysis = analysis_row["analysis"]
-        topic = analysis.get("main_topic", "")
+        topic = analysis.get("main_topic", "") or "본"
         target["objective"] = (
-            f"{target['title']}에 대해 {topic} 자료에서 확인되는 근거만으로 서술한다."
+            f"{target['title']}에 대해 {topic} 자료를 바탕으로, "
+            "근거 있는 사실과 그에 대한 전문 분석을 서술한다. "
+            "수치·구체 사실은 출처를 밝히고, 자료에서 확인되지 않은 내용은 한계·미확인으로 명시한다."
         )
         if not target.get("analysis_questions"):
             target["analysis_questions"] = [
-                f"{target['title']}과 관련된 핵심 근거는 무엇인가?"
+                f"{target['title']}에서 확인할 핵심 사실과 분석 포인트는 무엇인가?",
+                f"{target['title']} 관련 자료 공백·한계는 무엇인가?",
             ]
         self.plans.replace_nodes(outline["outline_id"], nodes)
         return target

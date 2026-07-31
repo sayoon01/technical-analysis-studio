@@ -13,6 +13,7 @@ router = APIRouter(tags=["editions-sections"])
 class ProduceBody(BaseModel):
     parent_edition_id: str | None = None
     new_source_ids: list[str] | None = None
+    resume_edition_id: str | None = None
 
 
 class ImpactBody(BaseModel):
@@ -25,11 +26,13 @@ def create_and_produce(project_id: str, body: ProduceBody | None = None):
     try:
         parent = body.parent_edition_id if body else None
         new_ids = body.new_source_ids if body else None
-        if parent:
-            return get_edition_service().improve(
-                project_id, parent, new_source_ids=new_ids
-            )
-        return get_edition_service().produce(project_id)
+        resume_id = body.resume_edition_id if body else None
+        return get_edition_service().produce(
+            project_id,
+            parent_edition_id=parent,
+            new_source_ids=new_ids,
+            resume_edition_id=resume_id,
+        )
     except KeyError:
         raise HTTPException(404, "Project not found") from None
     except ValueError as e:
@@ -66,6 +69,17 @@ def produce_edition(edition_id: str):
     try:
         edition = get_edition_service().get_edition(edition_id)
         return get_edition_service().produce(edition["project_id"])
+    except KeyError:
+        raise HTTPException(404, "Edition not found") from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.post("/api/editions/{edition_id}/resume")
+def resume_edition(edition_id: str):
+    """Continue writing an interrupted edition (skip completed DRAFT sections)."""
+    try:
+        return get_edition_service().resume(edition_id)
     except KeyError:
         raise HTTPException(404, "Edition not found") from None
     except ValueError as e:

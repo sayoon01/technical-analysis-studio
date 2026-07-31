@@ -148,14 +148,14 @@ def plan_offline(analysis: CorpusAnalysis, source_ids: list[str] | None = None) 
     if analysis.business_or_technical_problems:
         parent = add(
             "문제와 배경",
-            "자료에서 확인되는 기존 문제와 추진 배경을 정리한다.",
+            "자료에서 확인되는 기존 문제·추진 배경을 정리하고, 그 의미를 분석한다. 미확인은 한계로 명시한다.",
             evidence=["PROBLEM"],
             questions=["자료가 제시하는 핵심 문제는 무엇인가?"],
         )
         for i, prob in enumerate(analysis.business_or_technical_problems[:4], start=1):
             add(
                 _short_title(prob, fallback=f"문제 {i}"),
-                f"‘{prob}’ 관련 근거를 서술한다.",
+                f"‘{prob}’에 대한 근거 있는 사실과 분석 포인트를 서술한다. 확인되지 않은 내용은 한계로 적는다.",
                 level=2,
                 parent_id=parent.node_id,
                 evidence=["PROBLEM"],
@@ -173,7 +173,7 @@ def plan_offline(analysis: CorpusAnalysis, source_ids: list[str] | None = None) 
         for i, comp in enumerate((analysis.system_components or analysis.key_technologies)[:4], 1):
             add(
                 _short_title(comp, fallback=f"구성 {i}"),
-                f"‘{comp}’의 역할과 자료상 근거를 정리한다.",
+                f"‘{comp}’의 역할·자료상 근거를 정리하고 기술적으로 해석한다. 미확인 세부 구현은 단정하지 않는다.",
                 level=2,
                 parent_id=parent.node_id,
                 evidence=["ARCHITECTURE"],
@@ -183,7 +183,7 @@ def plan_offline(analysis: CorpusAnalysis, source_ids: list[str] | None = None) 
     if analysis.processes:
         parent = add(
             "프로세스와 변화",
-            "업무/기술 흐름과 변경점을 분석한다.",
+            "업무/기술 흐름과 변경점을 사실과 분석으로 서술한다. 자료 공백은 한계로 명시한다.",
             evidence=["PROCESS", "COMPARISON"],
             visuals=["PROCESS_FLOW"],
             questions=["자료에 나타난 프로세스 단계는 무엇인가?"],
@@ -191,7 +191,7 @@ def plan_offline(analysis: CorpusAnalysis, source_ids: list[str] | None = None) 
         for i, proc in enumerate(analysis.processes[:4], 1):
             add(
                 _short_title(proc, fallback=f"흐름 {i}"),
-                f"‘{proc}’ 관련 절차를 정리한다.",
+                f"‘{proc}’ 관련 절차의 사실과 변화 의미를 정리한다.",
                 level=2,
                 parent_id=parent.node_id,
                 evidence=["PROCESS"],
@@ -201,7 +201,7 @@ def plan_offline(analysis: CorpusAnalysis, source_ids: list[str] | None = None) 
     if analysis.quantitative_findings:
         parent = add(
             "정량 성과",
-            "측정된 지표·변화량·측정방법을 근거와 함께 기술한다.",
+            "측정된 지표·변화량·측정방법을 근거와 함께 기술하고, 성과 해석과 한계를 구분한다.",
             evidence=["METRIC"],
             visuals=["BAR_CHART", "COMPARISON_TABLE"],
             questions=["각 지표의 정의와 측정 조건은 무엇인가?"],
@@ -209,7 +209,7 @@ def plan_offline(analysis: CorpusAnalysis, source_ids: list[str] | None = None) 
         for i, m in enumerate(analysis.quantitative_findings[:6], 1):
             add(
                 m.name[:40] or f"지표 {i}",
-                f"{m.name}의 변화({m.change or 'N/A'})와 측정 조건을 서술한다.",
+                f"{m.name}의 변화({m.change or 'N/A'})·측정 조건을 근거와 함께 서술하고 의미를 분석한다.",
                 level=2,
                 parent_id=parent.node_id,
                 evidence=["METRIC"],
@@ -219,7 +219,7 @@ def plan_offline(analysis: CorpusAnalysis, source_ids: list[str] | None = None) 
     if analysis.qualitative_findings:
         add(
             "정성 효과와 조건",
-            "정성 평가를 자료 근거 범위 안에서 정리하고 한계를 명시한다.",
+            "정성 평가를 자료 근거 범위에서 정리하고, 해석과 한계를 명시한다.",
             evidence=["QUALITATIVE", "CONSTRAINT"],
         )
 
@@ -231,7 +231,7 @@ def plan_offline(analysis: CorpusAnalysis, source_ids: list[str] | None = None) 
     )
     add(
         "종합 결론",
-        "앞 장의 근거에 기반한 결론만 제시한다.",
+        "앞 장의 근거에 기반한 결론과 시사점을 제시한다. 확인되지 않은 확정 주장은 피하고 한계를 남긴다.",
         evidence=["DEFINITION"],
         length=600,
     )

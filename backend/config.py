@@ -22,6 +22,8 @@ class Settings:
     embedding_model: str = "bge-m3"
     # llm | offline  — offline는 corpus 기반 deterministic (테스트/무LLM)
     llm_mode: str = "llm"
+    # off | delta — evidence researcher never regenerates full EvidencePack JSON
+    evidence_refine_mode: str = "off"
 
 
 def load_settings() -> Settings:
@@ -40,6 +42,7 @@ def load_settings() -> Settings:
             "EMBEDDING_MODEL", os.getenv("OLLAMA_EMBED_MODEL", "bge-m3")
         ),
         llm_mode=os.getenv("TAS_LLM_MODE", "llm").lower(),
+        evidence_refine_mode=os.getenv("TAS_EVIDENCE_REFINE", "off").lower(),
     )
 
 

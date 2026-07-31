@@ -9,6 +9,7 @@ parallel_reviewers:
 
 quality_gate:
   blockers:
+    # Unfounded factual claims / fabricated metrics only — not analysis paragraphs.
     unsupported_major_claims: 0
     broken_citations: 0
     numeric_mismatches: 0
@@ -17,7 +18,8 @@ quality_gate:
   limits:
     maximum_revision_count: 3
     duplicate_paragraph_ratio: 0.10
-    uncited_major_claim_ratio: 0.02
+    # Soft signal: major factual claims should usually be cited; analysis may be uncited.
+    uncited_major_claim_ratio: 0.05
 
 # LLM numeric scores are advisory only.
 advisory_scores:

@@ -116,6 +116,108 @@ class ProductionPipeline:
             "mode": "full",
         }
 
+    def run_resume(self, project_id: str, edition_id: str) -> dict:
+        """Continue an interrupted edition: skip complete DRAFT sections, rewrite the rest."""
+        project = self.projects.get(project_id)
+        if not project:
+            raise KeyError(project_id)
+        edition = self.editions.get(edition_id)
+        if not edition or edition["project_id"] != project_id:
+            raise ValueError("Invalid edition_id for resume")
+
+        plan = self.plans.latest_plan(project_id)
+        outline = self.plans.get_outline(project_id)
+        if not plan or not outline:
+            raise ValueError("Approved plan/outline required")
+        if not outline.get("approved"):
+            raise ValueError("Outline not approved")
+
+        if project["stage"] != ProjectStage.PRODUCING.value:
+            self.projects.update_stage(project_id, ProjectStage.PRODUCING.value)
+
+        self.projects.patch(project_id, current_edition_id=edition_id)
+        if edition.get("status") != "PRODUCING":
+            self.editions.update_status(edition_id, "PRODUCING")
+
+        source_ids = [
+            s["source_id"]
+            for s in self.sources.list_for_project(project_id)
+            if s.get("role") == "EVIDENCE_SOURCE" and s.get("status") == "READY"
+        ]
+        format_notes = _role_text_digest(
+            self.conn, project_id, SourceRole.FORMAT_REFERENCE.value
+        ) or None
+
+        existing = self.sections.list_for_edition(edition_id)
+        by_node = {s.get("outline_node_id"): s for s in existing if s.get("outline_node_id")}
+
+        nodes = outline["nodes"]
+        produced = []
+        prev_summary = None
+        skipped = 0
+        rewritten = 0
+
+        for i, node in enumerate(nodes):
+            next_obj = nodes[i + 1]["objective"] if i + 1 < len(nodes) else None
+            prior = by_node.get(node["node_id"])
+            if prior and self._section_is_complete(prior):
+                skipped += 1
+                prev_summary = (prior.get("content_markdown") or "")[:400]
+                produced.append(
+                    {
+                        "section_id": prior["section_id"],
+                        "title": prior.get("title") or node["title"],
+                        "status": prior.get("status"),
+                        "resumed": "skipped",
+                    }
+                )
+                continue
+
+            section = self._produce_section(
+                project_id=project_id,
+                edition_id=edition_id,
+                node=node,
+                source_ids=source_ids,
+                plan_title=plan.get("title"),
+                prev_summary=prev_summary,
+                next_objective=next_obj,
+                existing_section_id=prior["section_id"] if prior else None,
+                format_notes=format_notes,
+            )
+            rewritten += 1
+            produced.append(
+                {
+                    "section_id": section["section_id"],
+                    "title": section["title"],
+                    "status": section["status"],
+                    "resumed": "rewritten" if prior else "created",
+                }
+            )
+            prev_summary = (section.get("content_markdown") or "")[:400]
+            by_node[node["node_id"]] = section
+
+        self.editions.update_status(edition_id, "IN_REVIEW")
+        self.projects.update_stage(project_id, ProjectStage.REVIEWING.value)
+
+        return {
+            "edition_id": edition_id,
+            "edition_number": edition["edition_number"],
+            "snapshot_id": edition.get("corpus_snapshot_id"),
+            "sections": produced,
+            "stage": ProjectStage.REVIEWING.value,
+            "mode": "resume",
+            "skipped": skipped,
+            "rewritten": rewritten,
+        }
+
+    @staticmethod
+    def _section_is_complete(section: dict) -> bool:
+        status = (section.get("status") or "").upper()
+        if status in {"RESEARCHING", "WRITING", "REVISING", "PENDING", "FAILED"}:
+            return False
+        md = (section.get("content_markdown") or "").strip()
+        return len(md) >= 40
+
     def run_incremental(
         self,
         project_id: str,

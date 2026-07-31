@@ -30,7 +30,10 @@ def write_section_offline(
         lines.append(f"{text.rstrip()}{cite}")
         lines.append("")
 
-    para(f"본 절은 ‘{objective}’을(를) 목표로, 업로드 원본에서 확인된 근거만 서술한다.")
+    para(
+        f"본 절은 ‘{objective}’을(를) 목표로 한다. "
+        "사실·수치는 업로드 원본 근거만 쓰고, 해석·시사점·한계는 분석으로 구분해 서술한다."
+    )
 
     if pack.definitions:
         for item in pack.definitions[:3]:
@@ -79,13 +82,14 @@ def write_section_offline(
     if not pack.supporting_facts and not pack.metrics and not pack.definitions:
         para(
             "이 절과 직접 연결되는 원문 근거가 Evidence Pack에 충분하지 않다. "
-            "추가 자료 없이는 세부 사실을 단정하지 않는다."
+            "세부 사실은 단정하지 않고, 확인 가능한 범위와 한계만 명시한다."
         )
 
     # Light analysis sentence (explicitly marked)
     if pack.supporting_facts or pack.metrics:
         para(
-            "【분석】 위 사실은 원본 페이지에 근거하며, 자료에 없는 구현 세부·인과는 추론하지 않는다."
+            "【분석】 위 사실에 근거해 기술·운영 함의를 해석한다. "
+            "자료에 없는 수치·구현 세부·확정적 인과는 단정하지 않는다."
         )
 
     return "\n".join(lines).strip() + "\n"

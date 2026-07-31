@@ -1,6 +1,6 @@
 """Domain enums for Technical Analysis Studio.
 
-도메인·주제별 분기 금지. 자료에서 발견된 구조만 표현한다.
+도메인·주제별 분기 금지. 자료에서 발견된 구조와 그에 대한 분석을 표현한다.
 """
 
 from enum import StrEnum

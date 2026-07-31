@@ -35,6 +35,7 @@ export const api = {
       label?: string | null;
       started_at?: string | null;
       current_edition_id?: string;
+      interrupted?: boolean;
     }>(`/api/projects/${id}/status`),
   listSources: (projectId: string) =>
     request<import("../types").Source[]>(`/api/projects/${projectId}/sources`),
@@ -87,6 +88,10 @@ export const api = {
     request<Record<string, unknown>>(`/api/projects/${projectId}/editions`, {
       method: "POST",
       body: JSON.stringify({ parent_edition_id: parentEditionId ?? null }),
+    }),
+  resumeProduce: (editionId: string) =>
+    request<Record<string, unknown>>(`/api/editions/${editionId}/resume`, {
+      method: "POST",
     }),
   listEditions: (projectId: string) =>
     request<import("../types").Edition[]>(`/api/projects/${projectId}/editions`),

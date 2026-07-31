@@ -118,14 +118,30 @@ def generate_structured(
 
     # Field names only — full JSON Schema bloats prompts and slows 31B models.
     fields = list(schema.model_json_schema().get("properties", {}).keys())
-    schema_hint = (
-        "Respond with a single JSON object using these keys only:\n"
-        f"{json.dumps(fields, ensure_ascii=False)}\n"
-        "Rules: list fields must be JSON arrays. "
-        "quantitative_findings must be an array of objects "
-        'like {"name":"...","change":"...","change_value":8,"change_unit":"%"} '
-        "not plain strings."
-    )
+    name = schema.__name__
+    if name in {"CorpusAnalysis", "ReportPlan"}:
+        schema_hint = (
+            "Respond with a single JSON object using these keys only:\n"
+            f"{json.dumps(fields, ensure_ascii=False)}\n"
+            "Rules: list fields must be JSON arrays. "
+            "quantitative_findings must be an array of objects "
+            'like {"name":"...","change":"...","change_value":8,"change_unit":"%"} '
+            "not plain strings."
+        )
+    elif name == "EvidenceRefineDelta":
+        schema_hint = (
+            "Respond with a single JSON object using these keys only:\n"
+            f"{json.dumps(fields, ensure_ascii=False)}\n"
+            "Use existing candidate ids only. Do not invent ids or rewrite evidence bodies. "
+            "keep_ids/drop_ids/ranking are string arrays; conflicts is an array of "
+            '{"description":"...","evidence_ids":["…"]}.'
+        )
+    else:
+        schema_hint = (
+            "Respond with a single JSON object using these keys only:\n"
+            f"{json.dumps(fields, ensure_ascii=False)}\n"
+            "Rules: list fields must be JSON arrays; do not invent required id fields."
+        )
     sys = f"{system_prompt}\n\n{schema_hint}"
     last_err: Exception | None = None
     prompt = user_prompt

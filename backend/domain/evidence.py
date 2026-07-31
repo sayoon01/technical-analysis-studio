@@ -108,6 +108,23 @@ class EvidenceConflict(BaseModel):
     severity: str = "MAJOR"
 
 
+class EvidenceConflictHint(BaseModel):
+    """LLM-only conflict note; ids must refer to existing evidence/metric ids."""
+
+    description: str
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class EvidenceRefineDelta(BaseModel):
+    """Small refine decision — never regenerates evidence bodies or provenance."""
+
+    keep_ids: list[str] = Field(default_factory=list)
+    drop_ids: list[str] = Field(default_factory=list)
+    ranking: list[str] = Field(default_factory=list)
+    missing_evidence: list[str] = Field(default_factory=list)
+    conflicts: list[EvidenceConflictHint] = Field(default_factory=list)
+
+
 class EvidencePack(BaseModel):
     section_id: str
     section_objective: str

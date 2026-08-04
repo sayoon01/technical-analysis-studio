@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.adk_app.model_factory import build_litellm_model
+from backend.adk_app.workflows.planning_workflow import run_corpus_analysis
 
 
 @dataclass(slots=True)
@@ -26,7 +27,20 @@ class AdkRunner:
         return build_litellm_model(model_id=model_id)
 
     def run(self, config: AdkRunConfig) -> dict[str, Any]:
-        # Placeholder envelope for phase-3; real graph execution follows.
+        if config.workflow_name == "planning_workflow.corpus_analysis":
+            analysis = run_corpus_analysis(
+                (config.payload or {}).get("context") or {},
+                mode=((config.payload or {}).get("mode") or "adk"),
+            )
+            return {
+                "workflow_name": config.workflow_name,
+                "project_id": config.project_id,
+                "edition_id": config.edition_id,
+                "status": "COMPLETED",
+                "output": analysis.model_dump(),
+            }
+
+        # Placeholder envelope for remaining phase workflows.
         return {
             "workflow_name": config.workflow_name,
             "project_id": config.project_id,

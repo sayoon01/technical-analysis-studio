@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
-import type { Outline, OutlineNode } from "../types";
+import type { Outline, OutlineNode, PlanDetail, TitleCandidate } from "../types";
 import { useWorkspace } from "../workspace";
 
 type GenPhase = "analyzing" | "planning" | null;
@@ -8,7 +8,9 @@ type GenPhase = "analyzing" | "planning" | null;
 export default function OutlineEditorPage() {
   const { projectId } = useWorkspace();
   const [outline, setOutline] = useState<Outline | null>(null);
+  const [plan, setPlan] = useState<PlanDetail | null>(null);
   const [selectedId, setSelectedId] = useState("");
+  const [selectedTitle, setSelectedTitle] = useState("");
   const [nodes, setNodes] = useState<OutlineNode[]>([]);
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
@@ -22,9 +24,12 @@ export default function OutlineEditorPage() {
 
   async function load() {
     if (!projectId) return;
-    const o = await api.getOutline(projectId);
+    const [o, p] = await Promise.all([api.getOutline(projectId), api.getPlan(projectId)]);
     setOutline(o);
+    setPlan(p);
     setNodes(o.nodes || []);
+    const recommended = p.plan?.strategy?.recommended_title || p.plan?.title || p.title || "";
+    setSelectedTitle(recommended);
     if (o.nodes?.[0]) setSelectedId(o.nodes[0].node_id);
   }
 
@@ -165,10 +170,20 @@ export default function OutlineEditorPage() {
     setBusy(true);
     setErr("");
     try {
+      const currentTitle = selectedTitle.trim();
+      const currentSubtitle = (
+        plan?.plan?.strategy?.subtitle || plan?.subtitle || ""
+      ).trim();
+      if (currentTitle) {
+        await api.patchPlan(projectId, {
+          title: currentTitle,
+          subtitle: currentSubtitle,
+        });
+      }
       await save();
       await api.approveOutline(projectId);
       await load();
-      setMsg("목차 승인 → PRODUCING");
+      setMsg("제목·목차 승인 → PRODUCING");
     } catch (e) {
       setErr(String((e as Error).message || e));
     } finally {
@@ -229,11 +244,23 @@ export default function OutlineEditorPage() {
         ? "목차 생성 중 (Ollama) — 수 분 걸릴 수 있습니다"
         : "");
 
+  const strategy = plan?.plan?.strategy || null;
+  const titleCandidates: TitleCandidate[] =
+    (plan?.plan?.title_candidates as TitleCandidate[] | undefined) ||
+    strategy?.title_candidates ||
+    [];
+
+  const recommendedPages = strategy?.recommended_pages ?? null;
+  const narrativeArc = strategy?.narrative_arc || [];
+  const includedScope = strategy?.included_scope || [];
+  const excludedScope = strategy?.excluded_scope || [];
+  const limitations = strategy?.evidence_limitations || [];
+
   return (
     <div>
       <h1 className="page-title">목차</h1>
       <p className="page-desc">
-        {outline?.title || "계획 제목 없음"}
+        {selectedTitle || outline?.title || "계획 제목 없음"}
         {outline?.approved ? " · 승인됨" : ""}
       </p>
 
@@ -270,6 +297,90 @@ export default function OutlineEditorPage() {
           </div>
         </div>
       )}
+
+      <section className="card" style={{ marginBottom: "0.9rem" }}>
+        <h2 className="pane-title" style={{ marginTop: 0 }}>보고서 전략</h2>
+        <div className="stack">
+          <div className="field">
+            <label>승인 제목</label>
+            <input
+              value={selectedTitle}
+              onChange={(e) => setSelectedTitle(e.target.value)}
+              placeholder="제목 후보를 선택하거나 직접 수정"
+            />
+          </div>
+          {titleCandidates.length > 0 && (
+            <div className="field">
+              <label>제목 후보</label>
+              <div className="stack">
+                {titleCandidates.map((c, i) => (
+                  <button
+                    key={`${c.title}-${i}`}
+                    type="button"
+                    className="secondary"
+                    onClick={() => setSelectedTitle(c.title)}
+                    style={{ textAlign: "left" }}
+                  >
+                    <strong>{c.title}</strong>
+                    <div className="muted" style={{ fontSize: "0.8rem" }}>
+                      {c.style}
+                      {c.rationale ? ` · ${c.rationale}` : ""}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="field">
+            <label>중심 논지</label>
+            <div>{plan?.plan?.central_thesis || strategy?.central_thesis || "—"}</div>
+          </div>
+          <div className="field">
+            <label>권장 분량</label>
+            <div>{recommendedPages ? `${recommendedPages} pages` : "—"}</div>
+          </div>
+          <div className="field">
+            <label>포함 범위</label>
+            <div className="row">
+              {includedScope.length
+                ? includedScope.map((x, i) => (
+                    <span key={i} className="badge">{x}</span>
+                  ))
+                : <span className="muted">없음</span>}
+            </div>
+          </div>
+          <div className="field">
+            <label>제외 범위</label>
+            <div className="row">
+              {excludedScope.length
+                ? excludedScope.map((x, i) => (
+                    <span key={i} className="badge">{x}</span>
+                  ))
+                : <span className="muted">없음</span>}
+            </div>
+          </div>
+          <div className="field">
+            <label>자료 한계</label>
+            <div className="row">
+              {limitations.length
+                ? limitations.map((x, i) => (
+                    <span key={i} className="badge">{x}</span>
+                  ))
+                : <span className="muted">없음</span>}
+            </div>
+          </div>
+          {narrativeArc.length > 0 && (
+            <div className="field">
+              <label>내러티브 흐름</label>
+              <ol className="extract-list" style={{ margin: 0 }}>
+                {narrativeArc.map((x, i) => (
+                  <li key={i}>{x}</li>
+                ))}
+              </ol>
+            </div>
+          )}
+        </div>
+      </section>
 
       <div className="panes-2">
         <section className="pane">

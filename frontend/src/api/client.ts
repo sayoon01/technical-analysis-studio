@@ -68,6 +68,8 @@ export const api = {
     request<Record<string, unknown>>(`/api/projects/${projectId}/plans/generate`, {
       method: "POST",
     }),
+  getPlan: (projectId: string) =>
+    request<import("../types").PlanDetail>(`/api/projects/${projectId}/plan`),
   getOutline: (projectId: string) =>
     request<import("../types").Outline>(`/api/projects/${projectId}/outline`),
   patchOutline: (projectId: string, nodes: unknown[]) =>

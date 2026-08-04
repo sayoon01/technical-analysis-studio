@@ -38,6 +38,47 @@ export type Outline = {
   nodes: OutlineNode[];
 };
 
+export type TitleCandidate = {
+  title: string;
+  style: "SOURCE_PRESERVING" | "ANALYTICAL" | "CONCISE" | string;
+  rationale?: string | null;
+};
+
+export type ReportStrategy = {
+  source_title?: string | null;
+  title_candidates?: TitleCandidate[];
+  recommended_title?: string;
+  subtitle?: string | null;
+  target_reader?: string;
+  purpose?: string;
+  central_thesis?: string;
+  narrative_arc?: string[];
+  included_scope?: string[];
+  excluded_scope?: string[];
+  evidence_limitations?: string[];
+  recommended_pages?: number;
+  recommended_chapter_count?: number;
+  recommended_visual_count?: number;
+};
+
+export type PlanDetail = {
+  plan_id: string;
+  project_id: string;
+  title: string;
+  subtitle?: string | null;
+  purpose?: string;
+  target_reader?: string;
+  report_summary?: string;
+  plan: {
+    title?: string;
+    subtitle?: string | null;
+    title_candidates?: TitleCandidate[];
+    central_thesis?: string | null;
+    strategy?: ReportStrategy | null;
+    [key: string]: unknown;
+  };
+};
+
 export type Section = {
   section_id: string;
   edition_id: string;

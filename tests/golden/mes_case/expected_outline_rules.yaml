@@ -1,0 +1,8 @@
+top_level_min: 5
+top_level_max: 8
+forbidden_top_level:
+  - PDA
+  - VPN
+  - User PC
+  - MES System
+  - Hourly production volume

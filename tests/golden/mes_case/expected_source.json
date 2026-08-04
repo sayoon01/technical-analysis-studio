@@ -1,0 +1,13 @@
+{
+  "name": "MES source expectations",
+  "required_pages": {
+    "metrics": [16, 17],
+    "process_or_architecture": [13, 14]
+  },
+  "required_tokens": [
+    "시간당 생산량",
+    "출하 클레임",
+    "재공재고",
+    "납기 준수율"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "chapter_count": {
+    "min": 5,
+    "max": 8
+  },
+  "required_sections": [
+    "문제",
+    "구축",
+    "성과"
+  ]
+}

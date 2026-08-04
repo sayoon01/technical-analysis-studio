@@ -27,6 +27,9 @@ class Settings:
 
 
 def load_settings() -> Settings:
+    llm_mode = os.getenv("TAS_LLM_MODE", "llm").lower()
+    if llm_mode == "fake":
+        llm_mode = "offline"
     return Settings(
         app_env=os.getenv("APP_ENV", "development"),
         data_dir=Path(os.getenv("DATA_DIR", "./data")),
@@ -41,7 +44,7 @@ def load_settings() -> Settings:
         embedding_model=os.getenv(
             "EMBEDDING_MODEL", os.getenv("OLLAMA_EMBED_MODEL", "bge-m3")
         ),
-        llm_mode=os.getenv("TAS_LLM_MODE", "llm").lower(),
+        llm_mode=llm_mode,
         evidence_refine_mode=os.getenv("TAS_EVIDENCE_REFINE", "off").lower(),
     )
 

@@ -1,0 +1,7 @@
+forbidden:
+  - "<!--"
+  - "P-INFRA-"
+  - "P-PROB-"
+  - "VISUAL_REQUEST"
+  - "SRC-"
+  - "EVD-"

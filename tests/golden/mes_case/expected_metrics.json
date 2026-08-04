@@ -1,0 +1,24 @@
+{
+  "performance_metrics": [
+    {
+      "name": "시간당 생산량",
+      "change_value": 8,
+      "direction": "INCREASE"
+    },
+    {
+      "name": "출하 클레임",
+      "change_value": 60,
+      "direction": "DECREASE"
+    },
+    {
+      "name": "재공재고",
+      "change_value": 33,
+      "direction": "DECREASE"
+    },
+    {
+      "name": "납기 준수율",
+      "change_value": 24,
+      "direction": "INCREASE"
+    }
+  ]
+}

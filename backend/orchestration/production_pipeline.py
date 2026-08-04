@@ -6,7 +6,6 @@ import sqlite3
 import uuid
 from pathlib import Path
 
-from backend.agents.evidence_researcher.agent import EvidenceResearcherAgent
 from backend.agents.technical_writer.agent import TechnicalWriterAgent
 from backend.domain.enums import ImpactDecision, ProjectStage, SourceRole
 from backend.domain.evidence import EvidencePack
@@ -14,6 +13,8 @@ from backend.orchestration.impact_analyzer import ImpactAnalyzer
 from backend.skills.analysis.claim_extractor import extract_claims
 from backend.skills.analysis.corpus_context import _role_text_digest
 from backend.skills.analysis.inherit_scrubber import scrub_inherited_section
+from backend.services.evidence_pack_service import EvidencePackService
+from backend.services.report_blueprint_service import ReportBlueprintService
 from backend.storage.edition_repository import (
     ClaimRepository,
     EditionRepository,
@@ -41,9 +42,8 @@ class ProductionPipeline:
         self.sections = SectionRepository(conn)
         self.packs = EvidencePackRepository(conn)
         self.claims = ClaimRepository(conn)
-        self.researcher = EvidenceResearcherAgent(
-            conn, llm_mode=llm_mode, vector_root=vector_root
-        )
+        self.evidence_packs = EvidencePackService(conn, vector_root=vector_root)
+        self.blueprints = ReportBlueprintService()
         self.writer = TechnicalWriterAgent(llm_mode=llm_mode)
 
     def run(self, project_id: str, *, parent_edition_id: str | None = None) -> dict:
@@ -79,6 +79,8 @@ class ProductionPipeline:
         self.projects.patch(project_id, current_edition_id=edition["edition_id"])
 
         nodes = outline["nodes"]
+        chapter_units = self.blueprints.build_from_outline(outline_nodes=nodes)
+        chapter_by_node = {c.node_id: c for c in chapter_units}
         produced = []
         prev_summary = None
         for i, node in enumerate(nodes):
@@ -92,6 +94,7 @@ class ProductionPipeline:
                 prev_summary=prev_summary,
                 next_objective=next_obj,
                 format_notes=format_notes,
+                chapter=chapter_by_node.get(node["node_id"]),
             )
             produced.append(
                 {
@@ -152,6 +155,8 @@ class ProductionPipeline:
         by_node = {s.get("outline_node_id"): s for s in existing if s.get("outline_node_id")}
 
         nodes = outline["nodes"]
+        chapter_units = self.blueprints.build_from_outline(outline_nodes=nodes)
+        chapter_by_node = {c.node_id: c for c in chapter_units}
         produced = []
         prev_summary = None
         skipped = 0
@@ -183,6 +188,7 @@ class ProductionPipeline:
                 next_objective=next_obj,
                 existing_section_id=prior["section_id"] if prior else None,
                 format_notes=format_notes,
+                chapter=chapter_by_node.get(node["node_id"]),
             )
             rewritten += 1
             produced.append(
@@ -301,6 +307,8 @@ class ProductionPipeline:
         rewritten = 0
         kept = 0
         nodes = outline["nodes"]
+        chapter_units = self.blueprints.build_from_outline(outline_nodes=nodes)
+        chapter_by_node = {c.node_id: c for c in chapter_units}
         prev_summary = None
         for i, node in enumerate(nodes):
             next_obj = nodes[i + 1]["objective"] if i + 1 < len(nodes) else None
@@ -325,6 +333,7 @@ class ProductionPipeline:
                     prev_summary=prev_summary,
                     next_objective=next_obj,
                     format_notes=format_notes,
+                    chapter=chapter_by_node.get(node["node_id"]),
                 )
                 rewritten += 1
                 action = decision.value
@@ -356,6 +365,7 @@ class ProductionPipeline:
                     prev_summary=prev_summary,
                     next_objective=next_obj,
                     format_notes=format_notes,
+                    chapter=chapter_by_node.get(node["node_id"]),
                 )
                 rewritten += 1
                 action = decision.value
@@ -410,11 +420,12 @@ class ProductionPipeline:
         section_id = f"SEC-{uuid.uuid4().hex[:10].upper()}"
         markdown = parent_section.get("content_markdown") or ""
         # Build pack for current corpus (for scrub + claim links)
-        pack = self.researcher.run(
+        pack = self.evidence_packs.build_for_chapter(
             project_id=project_id,
             section_id=section_id,
             title=node["title"],
             objective=node.get("objective") or parent_section.get("objective") or "",
+            chapter=None,
             research_questions=list(node.get("analysis_questions") or []),
             required_evidence_types=list(node.get("required_evidence_types") or []),
             source_ids=source_ids,
@@ -560,6 +571,7 @@ class ProductionPipeline:
         next_objective: str | None = None,
         existing_section_id: str | None = None,
         format_notes: str | None = None,
+        chapter=None,
     ) -> dict:
         section_id = existing_section_id or f"SEC-{uuid.uuid4().hex[:10].upper()}"
         if not existing_section_id:
@@ -576,11 +588,12 @@ class ProductionPipeline:
         else:
             self.sections.update(section_id, status="RESEARCHING")
 
-        pack = self.researcher.run(
+        pack = self.evidence_packs.build_for_chapter(
             project_id=project_id,
             section_id=section_id,
             title=node["title"],
             objective=node.get("objective") or "",
+            chapter=chapter,
             research_questions=list(node.get("analysis_questions") or []),
             required_evidence_types=list(node.get("required_evidence_types") or []),
             source_ids=source_ids,

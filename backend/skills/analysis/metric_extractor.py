@@ -11,7 +11,7 @@ import re
 import uuid
 from dataclasses import dataclass
 
-from backend.domain.enums import MetricDirection, VerificationStatus
+from backend.domain.enums import MetricCategory, MetricDirection, VerificationStatus
 
 
 @dataclass
@@ -26,6 +26,7 @@ class ExtractedMetric:
     confidence: float
     result_value: float | None = None
     baseline_value: float | None = None
+    category: MetricCategory = MetricCategory.PERFORMANCE_OUTCOME
 
 
 # "기존대비 8% 증가" / "기존 대비 +24% 향상"
@@ -43,6 +44,13 @@ _INLINE_CHANGE_RE = re.compile(
     r"(?P<sign>[+\-±])\s*(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>%)\s*"
     r"(?P<dir>증가|감소|향상|개선|상승|하락)?",
     re.IGNORECASE,
+)
+
+# "시간당 생산량 8% 증가", "출하 클레임 60% 감소"
+_NAME_VALUE_DIRECTION_RE = re.compile(
+    r"(?P<name>[가-힣A-Za-z][가-힣A-Za-z0-9 /·()_-]{1,40}?)"
+    r"\s+(?P<value>\d+(?:\.\d+)?)\s*%"
+    r"\s*(?P<dir>증가|감소|향상|개선|상승|하락)"
 )
 
 # Absolute quantities: number + measure unit (linguistic units, not domain terms)
@@ -107,6 +115,13 @@ def extract_metrics_from_text(text: str) -> list[ExtractedMetric]:
         if _append_change(results, seen, name=name, match=m, text=text, conf_base=0.8):
             occupied.append((m.start(), m.end()))
 
+    for m in _NAME_VALUE_DIRECTION_RE.finditer(text):
+        name = _clean_name(m.group("name"))
+        if not _ok_name(name):
+            continue
+        if _append_change(results, seen, name=name, match=m, text=text, conf_base=0.86):
+            occupied.append((m.start(), m.end()))
+
     for m in _ABS_VALUE_RE.finditer(text):
         if _overlaps(m.start(), m.end(), occupied):
             continue
@@ -134,6 +149,7 @@ def extract_metrics_from_text(text: str) -> list[ExtractedMetric]:
                 raw_span=m.group(0).strip(),
                 confidence=0.84,
                 result_value=value,
+                category=_classify_metric_category(name),
             )
         )
 
@@ -153,11 +169,12 @@ def _append_change(
     if not _ok_name(name):
         return False
     value = float(match.group("value"))
-    sign = match.group("sign") or ""
-    unit = match.group("unit") or "%"
+    gd = match.groupdict()
+    sign = gd.get("sign") or ""
+    unit = gd.get("unit") or "%"
     if unit.lower().startswith("percent") or unit == "퍼센트":
         unit = "%"
-    dir_word = (match.group("dir") or "").strip()
+    dir_word = (gd.get("dir") or "").strip()
     direction = _direction(dir_word, sign)
 
     key = (_norm(name), value, "chg")
@@ -193,6 +210,7 @@ def _append_change(
             measurement_method=method,
             raw_span=match.group(0).strip(),
             confidence=conf,
+            category=_classify_metric_category(name),
         )
     )
     return True
@@ -321,11 +339,27 @@ def _norm(s: str) -> str:
     return "".join(s.lower().split())
 
 
+def _classify_metric_category(name: str) -> MetricCategory:
+    n = _norm(name)
+    if any(k in n for k in ("사원", "임직원", "사업규모", "매출", "자본")):
+        return MetricCategory.COMPANY_PROFILE
+    if any(k in n for k in ("클레임", "불량", "품질", "납기", "생산", "재고", "수율")):
+        return MetricCategory.PERFORMANCE_OUTCOME
+    if any(k in n for k in ("가동률", "용량", "처리량", "처리속도")):
+        return MetricCategory.SYSTEM_CAPACITY
+    if any(k in n for k in ("비용", "원가", "운영비", "에너지")):
+        return MetricCategory.COST
+    if any(k in n for k in ("오차", "정확도", "결함")):
+        return MetricCategory.QUALITY
+    return MetricCategory.PERFORMANCE_OUTCOME
+
+
 def to_metric_row(
     metric: ExtractedMetric,
     *,
     source_id: str,
     page_number: int,
+    content_group_id: str | None = None,
 ) -> dict:
     mid = f"MET-{uuid.uuid4().hex[:10].upper()}"
     status = VerificationStatus.VERIFIED.value
@@ -347,5 +381,9 @@ def to_metric_row(
         "direction": metric.direction.value if metric.direction else None,
         "confidence": metric.confidence,
         "verification_status": status,
-        "payload_json": None,
+        "payload_json": {
+            "normalized_name": _norm(metric.name),
+            "category": metric.category.value,
+            "content_group_id": content_group_id,
+        },
     }

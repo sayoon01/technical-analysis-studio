@@ -39,6 +39,21 @@ def test_extract_inline_signed_pct():
     assert ("재공재고", 33.0, "DECREASE") in vals
 
 
+def test_extract_name_value_direction_phrase():
+    text = (
+        "시간당 생산량 8% 증가\n"
+        "출하 클레임 60% 감소\n"
+        "재공재고 33% 감소\n"
+        "납기 준수율 24% 향상"
+    )
+    metrics = extract_metrics_from_text(text)
+    vals = {(m.name, m.change_value, m.direction.value if m.direction else None) for m in metrics}
+    assert ("시간당 생산량", 8.0, "INCREASE") in vals
+    assert ("출하 클레임", 60.0, "DECREASE") in vals
+    assert ("재공재고", 33.0, "DECREASE") in vals
+    assert ("납기 준수율", 24.0, "INCREASE") in vals
+
+
 def test_extract_absolute_headcount_and_scale():
     text = """
 회사소개

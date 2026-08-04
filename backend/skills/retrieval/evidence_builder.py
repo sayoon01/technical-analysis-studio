@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-import uuid
+from hashlib import sha256
 from pathlib import Path
 
 from backend.domain.enums import EvidenceType, MetricDirection, VerificationStatus
@@ -73,13 +73,22 @@ def build_evidence_pack(
         sid = row.get("source_id") or ""
         page = int(row.get("page_number") or 0)
         etype = _classify_evidence_type(text, title, required_evidence_types)
+        block_ids = list(
+            row.get("block_ids")
+            or ([row["block_id"]] if row.get("block_id") else [])
+        )
         item = EvidenceItem(
-            evidence_id=f"EV-{uuid.uuid4().hex[:10].upper()}",
+            evidence_id=make_evidence_id(
+                sid,
+                page,
+                block_ids,
+                text,
+            ),
             type=etype,
             statement=_clip(text, 400),
             source_id=sid,
             page=page,
-            block_ids=list(row.get("block_ids") or ([row["block_id"]] if row.get("block_id") else [])),
+            block_ids=block_ids,
             confidence=float(row.get("rank_score") or row.get("score") or 0.5),
         )
         if etype == EvidenceType.DEFINITION:
@@ -359,3 +368,18 @@ def _token_overlap(a: str, b: str) -> int:
 def _clip(text: str, n: int) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     return text if len(text) <= n else text[: n - 1] + "…"
+
+
+def normalize_text(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
+def make_evidence_id(
+    source_id: str, page_number: int, block_ids: list[str], statement: str
+) -> str:
+    canonical = (
+        f"{source_id}|{page_number}|"
+        f"{','.join(sorted(block_ids))}|"
+        f"{normalize_text(statement)}"
+    )
+    return "EVD-" + sha256(canonical.encode("utf-8")).hexdigest()[:12].upper()

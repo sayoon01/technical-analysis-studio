@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import re
 import sqlite3
-import uuid
+from hashlib import sha256
+import json
 from pathlib import Path
 
 from backend.config import settings
@@ -127,6 +128,8 @@ class SourcePipeline:
                             raw.full_text = ocr.text
                             layout = classify_page(raw)
 
+                page_text = _page_text_from_blocks(layout.blocks) or raw.full_text
+                visual_role = _infer_visual_role(raw.page_number, page_text, layout.page_type)
                 page_id = f"PG-{source_id}-{raw.page_number:04d}"
                 self.pages.upsert(
                     {
@@ -147,7 +150,7 @@ class SourcePipeline:
                     if b.block_type == "IMAGE":
                         continue
                     block = {
-                        "block_id": f"BLK-{uuid.uuid4().hex[:12].upper()}",
+                        "block_id": _stable_block_id(source_id, raw.page_number, b.bbox, b.text),
                         "source_id": source_id,
                         "page_number": raw.page_number,
                         "block_type": b.block_type,
@@ -171,15 +174,20 @@ class SourcePipeline:
                         b.bbox[0] if b.bbox else 0.0,
                     ),
                 )
-                page_text = _page_text_from_blocks(metric_blocks) or raw.full_text
-                for metric in extract_metrics_from_text(page_text):
-                    row = to_metric_row(
-                        metric, source_id=source_id, page_number=raw.page_number
-                    )
-                    self._insert_metric(row)
+                for group_id, group_text in _metric_group_texts(
+                    metric_blocks, raw.page_number, raw.width
+                ):
+                    for metric in extract_metrics_from_text(group_text):
+                        row = to_metric_row(
+                            metric,
+                            source_id=source_id,
+                            page_number=raw.page_number,
+                            content_group_id=group_id,
+                        )
+                        self._insert_metric(row)
 
                 # Diagram / process structure (geometry-first; optional LLM refine)
-                if _should_extract_structure(layout, raw):
+                if _should_extract_structure(layout, raw, visual_role):
                     title_hint = None
                     for b in layout.blocks:
                         t = (b.text or "").splitlines()[0].strip() if b.text else ""
@@ -263,6 +271,9 @@ class SourcePipeline:
         raise ValueError(f"Unsupported format: {fmt}")
 
     def _insert_metric(self, row: dict) -> None:
+        payload = row["payload_json"]
+        if isinstance(payload, (dict, list)):
+            payload = json.dumps(payload, ensure_ascii=False)
         self.conn.execute(
             """
             INSERT INTO metric_facts (
@@ -285,7 +296,7 @@ class SourcePipeline:
                 row["direction"],
                 row["confidence"],
                 row["verification_status"],
-                row["payload_json"],
+                payload,
             ),
         )
         self.conn.commit()
@@ -366,8 +377,70 @@ def _page_text_from_blocks(blocks: list) -> str:
     return "\n".join(lines)
 
 
-def _should_extract_structure(layout, raw: RawPage) -> bool:
+def _metric_group_texts(blocks: list, page_number: int, page_width: float) -> list[tuple[str, str]]:
+    left: list[str] = []
+    right: list[str] = []
+    center: list[str] = []
+    for b in blocks:
+        text = (getattr(b, "text", None) or "").strip()
+        if not text or text == "[IMAGE]":
+            continue
+        x0, _, x1, _ = getattr(b, "bbox", (0.0, 0.0, 0.0, 0.0))
+        cx = (x0 + x1) / 2.0
+        if cx < page_width * 0.45:
+            left.append(text)
+        elif cx > page_width * 0.55:
+            right.append(text)
+        else:
+            center.append(text)
+    out: list[tuple[str, str]] = []
+    if left:
+        out.append((f"P{page_number:02d}-LEFT", "\n".join(left)))
+    if right:
+        out.append((f"P{page_number:02d}-RIGHT", "\n".join(right)))
+    if center:
+        out.append((f"P{page_number:02d}-CENTER", "\n".join(center)))
+    if not out:
+        out.append((f"P{page_number:02d}-WHOLE", _page_text_from_blocks(blocks)))
+    return out
+
+
+def _stable_block_id(
+    source_id: str,
+    page_number: int,
+    bbox: tuple[float, float, float, float] | None,
+    text: str,
+) -> str:
+    b = bbox or (0.0, 0.0, 0.0, 0.0)
+    norm_bbox = ",".join(f"{float(v):.2f}" for v in b)
+    norm_text = re.sub(r"\s+", " ", (text or "").strip().lower())
+    canonical = f"{source_id}|{page_number}|{norm_bbox}|{norm_text}"
+    return "BLK-" + sha256(canonical.encode("utf-8")).hexdigest()[:12].upper()
+
+
+def _infer_visual_role(page_number: int, page_text: str, page_type: PageType) -> str:
+    text = (page_text or "").lower()
+    if page_number == 1 and ("목차" not in text and "contents" not in text):
+        return "COVER"
+    if "목차" in text or "contents" in text:
+        return "TABLE_OF_CONTENTS"
+    if any(k in text for k in ("회사소개", "연혁", "비전", "대표이사", "조직도")):
+        return "COMPANY_PROFILE"
+    if page_type == PageType.CHART:
+        return "PERFORMANCE_CHART"
+    if page_type == PageType.DIAGRAM:
+        if any(k in text for k in ("프로세스", "절차", "흐름", "공정")):
+            return "PROCESS_FLOW"
+        return "SYSTEM_ARCHITECTURE"
+    if page_type == PageType.MIXED and any(k in text for k in ("비교", "vs", "대비")):
+        return "COMPARISON"
+    return "TEXT_CONTENT"
+
+
+def _should_extract_structure(layout, raw: RawPage, visual_role: str) -> bool:
     """Only run graph extract on diagram-like pages (not every title slide)."""
+    if visual_role in {"COVER", "COMPANY_PROFILE", "TABLE_OF_CONTENTS", "DECORATIVE"}:
+        return False
     if layout.page_type not in {PageType.DIAGRAM, PageType.MIXED, PageType.CHART}:
         return False
     blocks = [

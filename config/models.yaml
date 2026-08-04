@@ -24,10 +24,7 @@ agents:
   report_planner:
     model: planner-default
     temperature: 0.3
-  evidence_researcher:
-    model: gemma-default
-    temperature: 0.1
-  technical_writer:
+  chapter_writer:
     model: gemma-default
     temperature: 0.2
   technical_reviewer:

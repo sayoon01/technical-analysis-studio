@@ -101,6 +101,14 @@ export const api = {
     request<import("../types").Edition>(`/api/editions/${editionId}`),
   getSection: (sectionId: string) =>
     request<import("../types").Section>(`/api/sections/${sectionId}`),
+  patchParagraph: (
+    paragraphId: string,
+    body: { edit_state?: string; text?: string | null },
+  ) =>
+    request<Record<string, unknown>>(`/api/paragraphs/${paragraphId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
   reviewEdition: (editionId: string) =>
     request<Record<string, unknown>>(`/api/editions/${editionId}/review`, {
       method: "POST",

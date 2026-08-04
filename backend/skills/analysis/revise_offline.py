@@ -23,6 +23,17 @@ def revise_section_offline(
     changes: list[dict] = []
     resolved: list[str] = []
 
+    # Always strip internal markers from publication-facing markdown
+    cleaned, n_markers = _strip_internal_markers(content)
+    if n_markers:
+        content = cleaned
+        changes.append(
+            {
+                "change_type": "STRIP_INTERNAL_MARKERS",
+                "reason": f"removed {n_markers} internal marker(s)",
+            }
+        )
+
     # Drop paragraphs with unsupported numeric claims not in pack
     pack_numbers = set()
     for m in pack.metrics:
@@ -30,6 +41,31 @@ def revise_section_offline(
             pack_numbers.add(float(m.change_value))
 
     for issue in technical.issues:
+        if issue.issue_type in {"INTERNAL_MARKER", "FORBIDDEN_STRING"}:
+            content, n = _strip_internal_markers(content)
+            if n or issue.issue_type == "FORBIDDEN_STRING":
+                content = re.sub(r"\bEVD-[A-Za-z0-9]+\b", "", content)
+                changes.append(
+                    {
+                        "change_type": "STRIP_INTERNAL_MARKERS",
+                        "reason": issue.description,
+                        "issue_id": issue.issue_id,
+                    }
+                )
+                resolved.append(issue.issue_id)
+            continue
+        if issue.issue_type == "EMPTY_PARAGRAPH":
+            content = re.sub(r"\n\s*\n\s*\n+", "\n\n", content)
+            resolved.append(issue.issue_id)
+            changes.append(
+                {
+                    "change_type": "DROP_EMPTY_PARAGRAPH",
+                    "reason": issue.description,
+                    "issue_id": issue.issue_id,
+                }
+            )
+            continue
+
         if issue.issue_type == "NUMERIC_MISMATCH":
             # Remove sentences containing the bad number
             m = re.search(r"(\d+(?:\.\d+)?)\s*%", issue.description)
@@ -116,6 +152,16 @@ def revise_section_offline(
         content = write_section_offline(title=title, objective=objective, pack=pack)
         changes.append({"change_type": "REWRITE_FROM_PACK", "reason": "content too short after fixes"})
 
+    content, n_final = _strip_internal_markers(content)
+    if n_final:
+        changes.append(
+            {
+                "change_type": "STRIP_INTERNAL_MARKERS",
+                "reason": f"final pass removed {n_final} marker(s)",
+            }
+        )
+    content = re.sub(r"\n{3,}", "\n\n", content).strip() + "\n"
+
     return RevisionResult(
         revision=revision,
         updated_content=content,
@@ -134,3 +180,17 @@ def _remove_sentences_with_number(text: str, number: str) -> tuple[str, int]:
             continue
         kept.append(p)
     return ("\n".join(k for k in kept if k.strip()) + "\n", removed)
+
+
+def _strip_internal_markers(text: str) -> tuple[str, int]:
+    n = 0
+    out, c = re.subn(r"<!--[\s\S]*?-->", "", text or "")
+    n += c
+    out, c = re.subn(r"P-(?:INFRA|PROB|ARCH|RES|SUM)-\d+", "", out, flags=re.I)
+    n += c
+    out, c = re.subn(r"VISUAL_REQUEST\s*:?\s*\w*", "", out, flags=re.I)
+    n += c
+    out = re.sub(r"[ \t]+\n", "\n", out)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return out, n
+

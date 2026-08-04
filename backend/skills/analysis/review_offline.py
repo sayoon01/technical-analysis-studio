@@ -7,7 +7,7 @@ import uuid
 
 from backend.domain.enums import IssueSeverity, ReviewDecision
 from backend.domain.evidence import EvidencePack
-from backend.domain.review import ReviewIssue, TechnicalReview
+from backend.domain.review import EditorialReview, ReviewIssue, TechnicalReview
 from backend.skills.analysis.section_writer import extract_citations
 
 _NUM_PCT = re.compile(
@@ -148,8 +148,8 @@ def review_editorial_offline(
     *,
     section_id: str,
     markdown: str,
-) -> "EditorialReview":
-    from backend.domain.review import EditorialReview
+    scope: str = "CHAPTER",
+) -> EditorialReview:
 
     issues: list[ReviewIssue] = []
     promo_phrases = (
@@ -194,10 +194,52 @@ def review_editorial_offline(
                 break
 
     ratio = (dup / len(paras)) if paras else 0.0
+    if scope.upper() == "FULL_REPORT":
+        section_bodies = [
+            s.strip()
+            for s in re.split(r"\n\s*---+\s*\n", markdown or "")
+            if s.strip()
+        ]
+        if len(section_bodies) >= 2:
+            # Inter-section duplication check
+            for i, a in enumerate(section_bodies):
+                for b in section_bodies[i + 1 :]:
+                    if _similarity(a, b) > 0.8:
+                        issues.append(
+                            _issue(
+                                section_id,
+                                "CROSS_CHAPTER_DUPLICATION",
+                                IssueSeverity.MINOR,
+                                f"장간 중복이 높음: {_clip(a, 60)}",
+                                "중복되는 장의 핵심 메시지를 분리",
+                                reviewer_type="editorial",
+                            )
+                        )
+                        break
+            # Basic chapter balance check
+            lengths = [len(x) for x in section_bodies]
+            if lengths and max(lengths) > (min(lengths) * 2.7):
+                issues.append(
+                    _issue(
+                        section_id,
+                        "CHAPTER_LENGTH_IMBALANCE",
+                        IssueSeverity.MINOR,
+                        "장별 분량 편차가 큼",
+                        "짧은 장의 근거·해석을 보강하고 긴 장은 중복을 압축",
+                        reviewer_type="editorial",
+                    )
+                )
+
     critical = sum(1 for i in issues if i.severity == IssueSeverity.CRITICAL)
+    major = sum(1 for i in issues if i.severity == IssueSeverity.MAJOR)
     # Editorial major promo doesn't block finalize alone unless critical
     decision = ReviewDecision.PASS
-    if critical or promo >= 2 or ratio > 0.1:
+    if scope.upper() == "FULL_REPORT":
+        # Full-report pass gate is primarily structural/safety. Keep findings,
+        # but only block when critical issues are detected.
+        if critical:
+            decision = ReviewDecision.REVISE
+    elif critical or promo >= 2 or ratio > 0.1 or (scope.upper() == "FULL_REPORT" and major > 0):
         decision = ReviewDecision.REVISE
 
     return EditorialReview(

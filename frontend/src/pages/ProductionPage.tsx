@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
-import type { Claim, Edition, Section } from "../types";
+import type { Claim, Edition, Paragraph, Section } from "../types";
 import { useWorkspace } from "../workspace";
 
 type JobPhase = "producing" | "reviewing" | "analyzing" | "planning" | null;
@@ -263,6 +263,20 @@ export default function ProductionPage() {
     }
   }
 
+  async function toggleParagraphLock(p: Paragraph) {
+    if (!sectionId) return;
+    try {
+      const next = p.edit_state === "USER_LOCKED" ? "AI_EDITABLE" : "USER_LOCKED";
+      await api.patchParagraph(p.paragraph_id, { edit_state: next });
+      const latest = await api.getSection(sectionId);
+      setSection(latest);
+      setMsg(next === "USER_LOCKED" ? "문단 잠금 적용" : "문단 잠금 해제");
+      setErr("");
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    }
+  }
+
   if (!projectId) {
     return (
       <div>
@@ -369,6 +383,36 @@ export default function ProductionPage() {
                 {section.objective}
               </div>
               <pre className="body">{section.content_markdown || "(비어 있음)"}</pre>
+              {!!section.paragraphs?.length && (
+                <div style={{ marginTop: "0.6rem" }}>
+                  <div className="muted" style={{ fontSize: "0.8rem", marginBottom: "0.3rem" }}>
+                    문단 잠금
+                  </div>
+                  <ul className="extract-list">
+                    {section.paragraphs.map((p) => (
+                      <li key={p.paragraph_id}>
+                        <button
+                          type="button"
+                          className="secondary"
+                          style={{ marginRight: "0.35rem", padding: "0.2rem 0.45rem" }}
+                          onClick={() => toggleParagraphLock(p)}
+                        >
+                          {p.edit_state === "USER_LOCKED" ? "잠금해제" : "잠금"}
+                        </button>
+                        <span className={`badge ${p.edit_state === "USER_LOCKED" ? "warn" : ""}`}>
+                          {p.edit_state}
+                        </span>{" "}
+                        <span className="mono" style={{ fontSize: "0.72rem" }}>
+                          {p.paragraph_id}
+                        </span>
+                        <div className="muted" style={{ fontSize: "0.78rem" }}>
+                          {(p.text || "").slice(0, 120)}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </>
           ) : (
             <div className="muted">섹션을 선택하세요</div>

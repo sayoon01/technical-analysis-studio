@@ -1,9 +1,8 @@
-"""Build VisualRequests from edition evidence / outline and render them."""
+"""Build visual specs, validate them, and render assets."""
 
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
 import uuid
 from pathlib import Path
@@ -23,7 +22,7 @@ from backend.storage.edition_repository import EvidencePackRepository, SectionRe
 from backend.storage.plan_repository import PlanRepository
 
 
-class VisualService:
+class VisualSpecService:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
         self.sections = SectionRepository(conn)
@@ -48,6 +47,14 @@ class VisualService:
                 metric_rows.append({**m, "section_id": section["section_id"]})
 
         if metric_rows:
+            dedup: dict[str, dict] = {}
+            for m in metric_rows:
+                mid = m.get("metric_id") or f"M-{len(dedup)+1}"
+                if m.get("change_value") is None:
+                    continue
+                dedup[mid] = m
+            metric_rows = list(dedup.values())
+        if metric_rows:
             sid = metric_rows[0]["section_id"]
             pages = sorted({int(m.get("page_number") or 0) for m in metric_rows if m.get("page_number")})
             requests.append(
@@ -64,8 +71,6 @@ class VisualService:
                         "values": [
                             float(m["change_value"])
                             * (-1 if m.get("direction") == "DECREASE" and float(m.get("change_value") or 0) > 0 else 1)
-                            if m.get("change_value") is not None
-                            else 0.0
                             for m in metric_rows
                         ],
                         "source_note": f"근거 페이지: {', '.join(str(p) for p in pages)}",
@@ -136,163 +141,7 @@ class VisualService:
                     render_spec={"nodes": arch["nodes"], "edges": arch.get("edges") or []},
                 )
             )
-        else:
-            # Fallback: attach source figure pages without inventing topology
-            fig_pages = self._diagram_source_pages(project_id)
-            if fig_pages and sections:
-                sec = sections[0]["section_id"]
-                for s in sections:
-                    if any(k in (s.get("title") or "") for k in ("구성", "아키텍처", "시스템")):
-                        sec = s["section_id"]
-                        break
-                requests.append(
-                    VisualRequest(
-                        visual_id=f"VIS-{uuid.uuid4().hex[:8].upper()}",
-                        section_id=sec,
-                        visual_type=VisualType.SOURCE_FIGURE,
-                        title="원본 구성도",
-                        purpose="구조 Fact 없을 때 원본 페이지 참조",
-                        source_pages=fig_pages[:3],
-                        render_spec={"note": "원본 다이어그램 페이지 — 연결 관계는 시각 확인 필요"},
-                    )
-                )
-
-        # Explicit placeholders in markdown
-        for section in sections:
-            md = section.get("content_markdown") or ""
-            for m in re.finditer(r"<!--\s*VISUAL_REQUEST:\s*([A-Z_]+)\s*-->", md):
-                vtype = m.group(1)
-                try:
-                    vt = VisualType(vtype)
-                except ValueError:
-                    continue
-                if any(r.visual_type == vt and r.section_id == section["section_id"] for r in requests):
-                    continue
-                requests.append(
-                    VisualRequest(
-                        visual_id=f"VIS-{uuid.uuid4().hex[:8].upper()}",
-                        section_id=section["section_id"],
-                        visual_type=vt,
-                        title=f"{section['title']} — {vtype}",
-                        purpose="본문 VisualRequest 마커",
-                        render_spec={},
-                    )
-                )
         return requests
-
-    def render_all(
-        self,
-        requests: list[VisualRequest],
-        out_dir: Path,
-    ) -> dict:
-        out_dir.mkdir(parents=True, exist_ok=True)
-        rendered: dict[str, Path] = {}
-        embeds: dict[str, str] = {}  # visual_id -> markdown snippet
-
-        for req in requests:
-            paths, embed = self._render_one(req, out_dir)
-            if paths:
-                rendered[req.visual_id] = paths[0]
-                # store extras alongside
-                for p in paths[1:]:
-                    rendered[f"{req.visual_id}:{p.suffix}"] = p
-            if embed:
-                embeds[req.visual_id] = embed
-
-            # DB visual_assets
-            self.conn.execute(
-                """
-                INSERT OR REPLACE INTO visual_assets (
-                    asset_id, source_id, edition_id, visual_type, title,
-                    storage_path, render_spec_json, evidence_ids_json
-                ) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?)
-                """,
-                (
-                    req.visual_id,
-                    req.visual_type.value,
-                    req.title,
-                    str(paths[0]) if paths else None,
-                    json.dumps(req.render_spec, ensure_ascii=False),
-                    json.dumps(req.evidence_ids, ensure_ascii=False),
-                ),
-            )
-        self.conn.commit()
-
-        return {
-            "rendered": {k: str(v) for k, v in rendered.items()},
-            "embeds": embeds,
-            "unrendered": count_unrendered(
-                [r.model_dump(mode="json") for r in requests],
-                {r.visual_id: rendered[r.visual_id] for r in requests if r.visual_id in rendered},
-            ),
-            "requests": [r.model_dump(mode="json") for r in requests],
-        }
-
-    def _render_one(self, req: VisualRequest, out_dir: Path) -> tuple[list[Path], str]:
-        spec = req.render_spec or {}
-        base = out_dir / req.visual_id
-        paths: list[Path] = []
-        embed = ""
-
-        if req.visual_type in {VisualType.BAR_CHART, VisualType.LINE_CHART}:
-            labels = list(spec.get("labels") or ["항목"])
-            values = [float(v) for v in (spec.get("values") or [0])]
-            png = Path(str(base) + ".png")
-            note = spec.get("source_note")
-            if req.visual_type == VisualType.LINE_CHART:
-                render_line_chart(png, title=req.title, labels=labels, values=values, source_note=note)
-            else:
-                render_bar_chart(png, title=req.title, labels=labels, values=values, source_note=note)
-            paths.append(png)
-            embed = f"![{req.title}](visuals/{png.name})\n\n*{note or req.purpose}*"
-
-        elif req.visual_type in {VisualType.TABLE, VisualType.COMPARISON_TABLE, VisualType.MATRIX}:
-            headers = list(spec.get("headers") or ["항목", "값"])
-            rows = list(spec.get("rows") or [])
-            md = render_markdown_table(headers, rows, title=req.title)
-            csv_path = write_csv(Path(str(base) + ".csv"), headers, rows)
-            paths.append(csv_path)
-            embed = md
-
-        elif req.visual_type in {VisualType.PROCESS_FLOW, VisualType.TIMELINE}:
-            steps = list(spec.get("steps") or ["시작", "처리", "종료"])
-            mmd = to_mermaid_flowchart(steps, title=req.title)
-            mmd_path = write_mermaid(Path(str(base) + ".mmd"), mmd)
-            png = render_process_png(
-                Path(str(base) + ".png"),
-                steps,
-                title=req.title,
-                source_note=f"pages: {req.source_pages}" if req.source_pages else None,
-            )
-            paths.extend([png, mmd_path])
-            embed = (
-                f"![{req.title}](visuals/{png.name})\n\n"
-                f"```mermaid\n{mmd}```\n"
-            )
-
-        elif req.visual_type == VisualType.ARCHITECTURE_DIAGRAM:
-            nodes = list(spec.get("nodes") or [{"id": "A", "label": "Component"}])
-            edges = list(spec.get("edges") or [])
-            dot = to_dot(nodes, edges, title=req.title)
-            dot_path = write_dot(Path(str(base) + ".dot"), dot)
-            png = render_architecture_png(
-                Path(str(base) + ".png"),
-                nodes,
-                edges,
-                title=req.title,
-                source_note=f"pages: {req.source_pages}" if req.source_pages else None,
-            )
-            paths.extend([png, dot_path])
-            embed = f"![{req.title}](visuals/{png.name})\n"
-
-        else:
-            # SOURCE_FIGURE / unknown — skip binary, note only
-            note_path = Path(str(base) + ".txt")
-            note_path.write_text(f"{req.title}\n{req.purpose}\n", encoding="utf-8")
-            paths.append(note_path)
-            embed = f"*{req.title}: {req.purpose}*"
-
-        return paths, embed
 
     def _load_process_from_facts(self, project_id: str) -> dict:
         rows = self._structure_rows(project_id, "PROCESS")
@@ -372,15 +221,163 @@ class VisualService:
         except sqlite3.OperationalError:
             return []
 
-    def _diagram_source_pages(self, project_id: str) -> list[int]:
-        rows = self.conn.execute(
-            """
-            SELECT p.page_number
-            FROM sources s
-            JOIN source_pages p ON p.source_id = s.source_id
-            WHERE s.project_id = ? AND p.page_type IN ('DIAGRAM', 'MIXED')
-            ORDER BY p.page_number
-            """,
-            (project_id,),
-        ).fetchall()
-        return [int(r["page_number"]) for r in rows]
+
+class VisualValidationService:
+    FORBIDDEN_TOKENS = {"component", "시작", "처리", "종료", "김기헌", "감사합니다"}
+
+    def validate(self, req: VisualRequest) -> tuple[bool, str | None]:
+        spec = req.render_spec or {}
+        blob = json.dumps(spec, ensure_ascii=False).lower()
+        if any(tok in blob for tok in self.FORBIDDEN_TOKENS):
+            return False, "forbidden placeholder token"
+        if req.visual_type in {VisualType.BAR_CHART, VisualType.LINE_CHART}:
+            labels = list(spec.get("labels") or [])
+            values = list(spec.get("values") or [])
+            if not labels or not values or len(labels) != len(values):
+                return False, "invalid chart series"
+        if req.visual_type in {VisualType.PROCESS_FLOW, VisualType.TIMELINE}:
+            steps = [s for s in (spec.get("steps") or []) if str(s).strip()]
+            if len(steps) < 2:
+                return False, "insufficient process steps"
+        if req.visual_type == VisualType.ARCHITECTURE_DIAGRAM:
+            nodes = list(spec.get("nodes") or [])
+            if len(nodes) < 2:
+                return False, "insufficient architecture nodes"
+        if req.visual_type in {VisualType.COMPARISON_TABLE, VisualType.TABLE, VisualType.MATRIX}:
+            rows = list(spec.get("rows") or [])
+            if not rows:
+                return False, "empty table rows"
+        return True, None
+
+
+class VisualRenderService:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.conn = conn
+
+    def render_all(self, requests: list[VisualRequest], out_dir: Path) -> dict:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        rendered: dict[str, Path] = {}
+        embeds: dict[str, str] = {}
+        validator = VisualValidationService()
+        validated: list[VisualRequest] = []
+
+        for req in requests:
+            ok, _reason = validator.validate(req)
+            if not ok:
+                continue
+            validated.append(req)
+            paths, embed = self._render_one(req, out_dir)
+            if paths:
+                rendered[req.visual_id] = paths[0]
+                for p in paths[1:]:
+                    rendered[f"{req.visual_id}:{p.suffix}"] = p
+                self._save_asset(req, paths[0])
+            if embed:
+                embeds[req.visual_id] = embed
+        self.conn.commit()
+        return {
+            "rendered": {k: str(v) for k, v in rendered.items()},
+            "embeds": embeds,
+            "unrendered": count_unrendered(
+                [r.model_dump(mode="json") for r in validated],
+                {r.visual_id: rendered[r.visual_id] for r in validated if r.visual_id in rendered},
+            ),
+            "requests": [r.model_dump(mode="json") for r in validated],
+        }
+
+    def _save_asset(self, req: VisualRequest, path: Path) -> None:
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(visual_assets)").fetchall()}
+        if {"asset_id", "source_id", "edition_id", "visual_type", "title", "storage_path", "render_spec_json", "evidence_ids_json"}.issubset(cols):
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO visual_assets (
+                    asset_id, source_id, edition_id, visual_type, title, storage_path, render_spec_json, evidence_ids_json
+                ) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?)
+                """,
+                (
+                    req.visual_id,
+                    req.visual_type.value,
+                    req.title,
+                    str(path),
+                    json.dumps(req.render_spec, ensure_ascii=False),
+                    json.dumps(req.evidence_ids, ensure_ascii=False),
+                ),
+            )
+            return
+        if {"asset_id", "visual_id", "asset_kind", "file_path", "created_at"}.issubset(cols):
+            from datetime import datetime, timezone
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO visual_assets (asset_id, visual_id, asset_kind, file_path, created_at)
+                VALUES (?, ?, 'primary', ?, ?)
+                """,
+                (
+                    f"VAS-{uuid.uuid4().hex[:8].upper()}",
+                    req.visual_id,
+                    str(path),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+
+    def _render_one(self, req: VisualRequest, out_dir: Path) -> tuple[list[Path], str]:
+        spec = req.render_spec or {}
+        base = out_dir / req.visual_id
+        paths: list[Path] = []
+        embed = ""
+        if req.visual_type in {VisualType.BAR_CHART, VisualType.LINE_CHART}:
+            labels = list(spec.get("labels") or [])
+            values = [float(v) for v in (spec.get("values") or [])]
+            png = Path(str(base) + ".png")
+            note = spec.get("source_note")
+            if req.visual_type == VisualType.LINE_CHART:
+                render_line_chart(png, title=req.title, labels=labels, values=values, source_note=note)
+            else:
+                render_bar_chart(png, title=req.title, labels=labels, values=values, source_note=note)
+            paths.append(png)
+            embed = f"![{req.title}](visuals/{png.name})\n\n*{note or req.purpose}*"
+        elif req.visual_type in {VisualType.TABLE, VisualType.COMPARISON_TABLE, VisualType.MATRIX}:
+            headers = list(spec.get("headers") or [])
+            rows = list(spec.get("rows") or [])
+            md = render_markdown_table(headers, rows, title=req.title)
+            csv_path = write_csv(Path(str(base) + ".csv"), headers, rows)
+            paths.append(csv_path)
+            embed = md
+        elif req.visual_type in {VisualType.PROCESS_FLOW, VisualType.TIMELINE}:
+            steps = list(spec.get("steps") or [])
+            mmd = to_mermaid_flowchart(steps, title=req.title)
+            mmd_path = write_mermaid(Path(str(base) + ".mmd"), mmd)
+            png = render_process_png(
+                Path(str(base) + ".png"),
+                steps,
+                title=req.title,
+                source_note=f"pages: {req.source_pages}" if req.source_pages else None,
+            )
+            paths.extend([png, mmd_path])
+            embed = f"![{req.title}](visuals/{png.name})\n\n```mermaid\n{mmd}```\n"
+        elif req.visual_type == VisualType.ARCHITECTURE_DIAGRAM:
+            nodes = list(spec.get("nodes") or [])
+            edges = list(spec.get("edges") or [])
+            dot = to_dot(nodes, edges, title=req.title)
+            dot_path = write_dot(Path(str(base) + ".dot"), dot)
+            png = render_architecture_png(
+                Path(str(base) + ".png"),
+                nodes,
+                edges,
+                title=req.title,
+                source_note=f"pages: {req.source_pages}" if req.source_pages else None,
+            )
+            paths.extend([png, dot_path])
+            embed = f"![{req.title}](visuals/{png.name})\n"
+        return paths, embed
+
+
+class VisualService:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.specs = VisualSpecService(conn)
+        self.renderer = VisualRenderService(conn)
+
+    def collect_requests(self, edition_id: str, project_id: str) -> list[VisualRequest]:
+        return self.specs.collect_requests(edition_id, project_id)
+
+    def render_all(self, requests: list[VisualRequest], out_dir: Path) -> dict:
+        return self.renderer.render_all(requests, out_dir)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from backend.domain.review import EditorialReview, TechnicalReview
+from backend.skills.analysis.draft_validator import DraftValidationResult
 
 
 def can_finalize(
@@ -10,8 +11,11 @@ def can_finalize(
     editorial: EditorialReview,
     *,
     unrendered_visual_count: int = 0,
+    draft_validation: DraftValidationResult | None = None,
 ) -> bool:
     """Blockers must all be zero. Soft LLM scores are ignored."""
+    if draft_validation is not None and not draft_validation.ok:
+        return False
     return (
         technical.unsupported_claim_count == 0
         and technical.citation_mismatch_count == 0

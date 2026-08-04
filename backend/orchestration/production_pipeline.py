@@ -6,7 +6,7 @@ import sqlite3
 import uuid
 from pathlib import Path
 
-from backend.agents.technical_writer.agent import TechnicalWriterAgent
+from backend.agents.chapter_writer.agent import ChapterWriterAgent, render_chapter_markdown
 from backend.domain.enums import ImpactDecision, ProjectStage, SourceRole
 from backend.domain.evidence import EvidencePack
 from backend.orchestration.impact_analyzer import ImpactAnalyzer
@@ -17,6 +17,7 @@ from backend.services.evidence_pack_service import EvidencePackService
 from backend.services.report_blueprint_service import ReportBlueprintService
 from backend.storage.edition_repository import (
     ClaimRepository,
+    ChapterRepository,
     EditionRepository,
     EvidencePackRepository,
     SectionRepository,
@@ -42,9 +43,10 @@ class ProductionPipeline:
         self.sections = SectionRepository(conn)
         self.packs = EvidencePackRepository(conn)
         self.claims = ClaimRepository(conn)
+        self.chapters = ChapterRepository(conn)
         self.evidence_packs = EvidencePackService(conn, vector_root=vector_root)
         self.blueprints = ReportBlueprintService()
-        self.writer = TechnicalWriterAgent(llm_mode=llm_mode)
+        self.writer = ChapterWriterAgent(llm_mode=llm_mode)
 
     def run(self, project_id: str, *, parent_edition_id: str | None = None) -> dict:
         project = self.projects.get(project_id)
@@ -95,6 +97,7 @@ class ProductionPipeline:
                 next_objective=next_obj,
                 format_notes=format_notes,
                 chapter=chapter_by_node.get(node["node_id"]),
+                node_order=i + 1,
             )
             produced.append(
                 {
@@ -189,6 +192,7 @@ class ProductionPipeline:
                 existing_section_id=prior["section_id"] if prior else None,
                 format_notes=format_notes,
                 chapter=chapter_by_node.get(node["node_id"]),
+                node_order=i + 1,
             )
             rewritten += 1
             produced.append(
@@ -319,6 +323,10 @@ class ProductionPipeline:
             decision = (
                 impact_row.decision if impact_row else ImpactDecision.FULL_REWRITE
             )
+            if parent_sec is not None and parent_sec.get("outline_node_id"):
+                parent_chapter_id = f"CH-{parent_sec['outline_node_id']}"
+                if self.chapters.chapter_has_locked_paragraph(parent_chapter_id):
+                    decision = ImpactDecision.KEEP
             # New outline nodes not in parent → write fresh
             if parent_sec is None:
                 decision = ImpactDecision.ADD_SECTION
@@ -572,6 +580,7 @@ class ProductionPipeline:
         existing_section_id: str | None = None,
         format_notes: str | None = None,
         chapter=None,
+        node_order: int = 0,
     ) -> dict:
         section_id = existing_section_id or f"SEC-{uuid.uuid4().hex[:10].upper()}"
         if not existing_section_id:
@@ -629,15 +638,25 @@ class ProductionPipeline:
             )
 
         level = int(node.get("level") or 1)
-        markdown = self.writer.run(
+        draft = self.writer.run(
+            chapter_id=f"CH-{node['node_id']}",
             title=node["title"],
             objective=node.get("objective") or "",
             pack=pack,
             plan_title=plan_title,
             prev_summary=prev_summary,
             next_objective=next_objective,
-            heading_level=level + 1,
             format_notes=format_notes,
+        )
+        markdown = render_chapter_markdown(draft, heading_level=level + 1)
+        self.chapters.save_chapter_draft(
+            edition_id=edition_id,
+            section_id=section_id,
+            order_index=node_order,
+            chapter_key=node.get("node_id") or section_id,
+            draft=draft,
+            body_markdown=markdown,
+            summary="initial draft",
         )
 
         self.claims.delete_for_section(section_id)

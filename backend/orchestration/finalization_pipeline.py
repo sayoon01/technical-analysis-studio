@@ -12,14 +12,16 @@ from pathlib import Path
 
 from backend.config import settings
 from backend.domain.enums import ProjectStage
+from backend.services.publication_service import PublicationService
 from backend.services.visual_service import VisualService
 from backend.skills.export.docx_exporter import export_docx
 from backend.skills.export.markdown_exporter import export_markdown
 from backend.skills.export.pdf_exporter import export_pdf
 from backend.skills.export.reference_builder import write_claim_ledger
 from backend.skills.export.report_assembler import (
-    assemble_report_markdown,
+    markdown_to_html,
     number_figures,
+    publication_to_markdown,
     write_json,
 )
 from backend.storage.edition_repository import (
@@ -47,6 +49,7 @@ class FinalizationPipeline:
         self.claims = ClaimRepository(conn)
         self.reviews = ReviewRepository(conn)
         self.visuals = VisualService(conn)
+        self.publication = PublicationService()
 
     def run(self, edition_id: str) -> dict:
         edition = self.editions.get(edition_id)
@@ -75,20 +78,18 @@ class FinalizationPipeline:
         requests = self.visuals.collect_requests(edition_id, project_id)
         visual_result = self.visuals.render_all(requests, visuals_dir)
 
-        section_visuals: dict[str, list[str]] = {}
-        for req in requests:
-            section_visuals.setdefault(req.section_id, []).append(req.visual_id)
-
-        md = assemble_report_markdown(
+        publication_doc = self.publication.build_document(
             title=title,
             subtitle=subtitle,
             sections=sections,
-            visual_embeds=visual_result["embeds"],
-            section_visuals=section_visuals,
+            visuals=visual_result,
         )
+        md = publication_to_markdown(publication_doc)
         md = number_figures(md)
+        html = markdown_to_html(md, title=title)
 
         report_md = export_markdown(out_root / "report.md", md)
+        report_html = export_markdown(out_root / "report.html", html)
         report_docx = export_docx(
             out_root / "report.docx", md, title=title, image_root=visuals_dir
         )
@@ -130,6 +131,8 @@ class FinalizationPipeline:
             )
         write_json(out_root / "edition-diff.json", diff_payload)
         write_json(out_root / "visuals-index.json", visual_result["requests"])
+        write_json(out_root / "publication-document.json", publication_doc.model_dump(mode="json"))
+        self._save_publication_document(edition_id, publication_doc)
 
         zip_path = out_root.with_suffix(".zip")
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -147,6 +150,7 @@ class FinalizationPipeline:
         )
         for fmt, p in (
             ("markdown", report_md),
+            ("html", report_html),
             ("docx", report_docx),
             ("pdf", report_pdf),
         ):
@@ -169,6 +173,7 @@ class FinalizationPipeline:
             "zip_path": str(zip_path),
             "files": {
                 "markdown": str(report_md),
+                "html": str(report_html),
                 "docx": str(report_docx),
                 "pdf": str(report_pdf),
                 "zip": str(zip_path),
@@ -176,3 +181,27 @@ class FinalizationPipeline:
             "visuals": visual_result,
             "stage": ProjectStage.EXPORTED.value,
         }
+
+    def _save_publication_document(self, edition_id: str, publication_doc) -> None:
+        cols = {
+            r["name"] for r in self.conn.execute("PRAGMA table_info(publication_documents)").fetchall()
+        }
+        if not cols:
+            return
+        if {"publication_id", "edition_id", "title", "subtitle", "document_json", "created_at"}.issubset(cols):
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO publication_documents (
+                    publication_id, edition_id, title, subtitle, document_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"PUB-{uuid.uuid4().hex[:10].upper()}",
+                    edition_id,
+                    publication_doc.title,
+                    publication_doc.subtitle,
+                    json.dumps(publication_doc.model_dump(mode="json"), ensure_ascii=False),
+                    _now(),
+                ),
+            )
+            self.conn.commit()

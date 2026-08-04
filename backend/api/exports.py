@@ -16,8 +16,18 @@ def create_export(edition_id: str):
         return get_export_service().export_edition(edition_id)
     except KeyError:
         raise HTTPException(404, "Edition not found") from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
     except Exception as e:
         raise HTTPException(500, f"Export failed: {e}") from e
+
+
+@router.get("/api/editions/{edition_id}/export-readiness")
+def export_readiness(edition_id: str):
+    try:
+        return get_export_service().export_readiness(edition_id)
+    except KeyError:
+        raise HTTPException(404, "Edition not found") from None
 
 
 @router.get("/api/editions/{edition_id}/exports")

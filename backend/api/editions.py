@@ -22,6 +22,11 @@ class ImpactBody(BaseModel):
     new_source_ids: list[str] | None = None
 
 
+class ParagraphEditBody(BaseModel):
+    edit_state: str = "USER_LOCKED"
+    text: str | None = None
+
+
 @router.post("/api/projects/{project_id}/editions")
 def create_and_produce(project_id: str, body: ProduceBody | None = None):
     try:
@@ -159,3 +164,15 @@ def claim_locations(claim_id: str):
         return get_edition_service().resolve_claim_location(claim_id)
     except KeyError:
         raise HTTPException(404, "Claim not found") from None
+
+
+@router.patch("/api/paragraphs/{paragraph_id}")
+def patch_paragraph(paragraph_id: str, body: ParagraphEditBody):
+    try:
+        return get_edition_service().lock_paragraph(
+            paragraph_id,
+            text=body.text,
+            edit_state=body.edit_state,
+        )
+    except KeyError:
+        raise HTTPException(404, "Paragraph not found") from None

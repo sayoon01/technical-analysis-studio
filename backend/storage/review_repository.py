@@ -24,6 +24,16 @@ class ReviewRepository:
     def save_editorial(self, section_id: str, review: EditorialReview) -> str:
         return self._save(section_id, "editorial", review.decision.value, review.model_dump(mode="json"), review.issues)
 
+    def save_editorial_full_report(self, edition_id: str, review: EditorialReview) -> str:
+        synthetic_section_id = f"FULL-{edition_id}"
+        return self._save(
+            synthetic_section_id,
+            "editorial_full_report",
+            review.decision.value,
+            review.model_dump(mode="json"),
+            review.issues,
+        )
+
     def _save(self, section_id: str, reviewer_type: str, decision: str, payload: dict, issues) -> str:
         review_id = f"RV-{uuid.uuid4().hex[:10].upper()}"
         self.conn.execute(
@@ -96,6 +106,30 @@ class ReviewRepository:
             (section_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def list_full_report_reviews(self, edition_id: str) -> list[dict]:
+        synthetic_section_id = f"FULL-{edition_id}"
+        rows = self.conn.execute(
+            """
+            SELECT * FROM reviews
+            WHERE section_id = ? AND reviewer_type = 'editorial_full_report'
+            ORDER BY created_at DESC
+            """,
+            (synthetic_section_id,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["payload"] = json.loads(d["payload_json"])
+            d["issues"] = [
+                dict(i)
+                for i in self.conn.execute(
+                    "SELECT * FROM review_issues WHERE review_id = ?",
+                    (d["review_id"],),
+                ).fetchall()
+            ]
+            out.append(d)
+        return out
 
     def mark_issues_resolved(self, issue_ids: list[str]) -> None:
         for iid in issue_ids:

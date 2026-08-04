@@ -88,6 +88,16 @@ export type Section = {
   status?: string;
   claims?: Claim[];
   evidence_pack?: Record<string, unknown> | null;
+  paragraphs?: Paragraph[];
+};
+
+export type Paragraph = {
+  paragraph_id: string;
+  subsection_key?: string | null;
+  paragraph_type?: string | null;
+  text: string;
+  order_index: number;
+  edit_state: "AI_EDITABLE" | "USER_EDITED" | "USER_LOCKED" | string;
 };
 
 export type Claim = {

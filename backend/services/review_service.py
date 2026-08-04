@@ -41,6 +41,12 @@ class ReviewService:
     def review_section(self, section_id: str) -> dict:
         return self.loop.run_section(section_id)
 
+    def review_full_report(self, edition_id: str) -> dict:
+        edition = self.editions.get(edition_id)
+        if not edition:
+            raise KeyError(edition_id)
+        return self.loop.run_full_report(edition_id)
+
     def list_section_reviews(self, section_id: str) -> list[dict]:
         if not self.sections.get(section_id):
             raise KeyError(section_id)
@@ -50,3 +56,9 @@ class ReviewService:
         if not self.sections.get(section_id):
             raise KeyError(section_id)
         return self.reviews.open_issues(section_id)
+
+    def list_full_report_reviews(self, edition_id: str) -> list[dict]:
+        edition = self.editions.get(edition_id)
+        if not edition:
+            raise KeyError(edition_id)
+        return self.reviews.list_full_report_reviews(edition_id)

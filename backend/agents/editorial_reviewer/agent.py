@@ -15,8 +15,18 @@ class EditorialReviewerAgent:
     def __init__(self, *, llm_mode: str | None = None) -> None:
         self.llm_mode = (llm_mode or settings.llm_mode).lower()
 
-    def run(self, *, section_id: str, markdown: str) -> EditorialReview:
-        base = review_editorial_offline(section_id=section_id, markdown=markdown)
+    def run(
+        self,
+        *,
+        section_id: str,
+        markdown: str,
+        scope: str = "CHAPTER",
+    ) -> EditorialReview:
+        base = review_editorial_offline(
+            section_id=section_id,
+            markdown=markdown,
+            scope=scope,
+        )
         if self.llm_mode == "offline":
             return base
         try:
@@ -24,6 +34,7 @@ class EditorialReviewerAgent:
             user = json.dumps(
                 {
                     "section_id": section_id,
+                    "scope": scope,
                     "markdown": markdown[:12000],
                     "deterministic_findings": base.model_dump(mode="json"),
                 },

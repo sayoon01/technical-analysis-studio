@@ -71,7 +71,10 @@ def test_produce_sections_with_citations_and_claim_locations(env):
     result = editions.produce(project["project_id"])
     assert result["edition_id"]
     assert len(result["sections"]) >= 3
-    assert result["stage"] == ProjectStage.REVIEWING.value
+    assert result["stage"] in {
+        ProjectStage.REVIEWING.value,
+        ProjectStage.READY_FOR_EXPORT.value,
+    }
 
     edition = editions.get_edition(result["edition_id"])
     assert edition["sections"]

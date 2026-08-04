@@ -12,6 +12,7 @@ from backend.orchestration.production_pipeline import ProductionPipeline
 from backend.orchestration.review_loop import ReviewLoop
 from backend.services.job_status import lock_for, set_job
 from backend.storage.edition_repository import (
+    ChapterRepository,
     ClaimRepository,
     EditionRepository,
     EvidencePackRepository,
@@ -38,6 +39,7 @@ class EditionService:
         self.sections = SectionRepository(conn)
         self.claims = ClaimRepository(conn)
         self.packs = EvidencePackRepository(conn)
+        self.chapters = ChapterRepository(conn)
         self.pages = PageRepository(conn)
         self.blocks = ContentBlockRepository(conn)
         self.projects = ProjectRepository(conn)
@@ -184,7 +186,20 @@ class EditionService:
             pack = self.packs.get(d["evidence_pack_id"])
         d["evidence_pack"] = pack["pack"] if pack else None
         d["citation_targets"] = self._citation_targets(d["claims"])
+        chapter_id = f"CH-{d.get('outline_node_id')}" if d.get("outline_node_id") else None
+        if chapter_id and self.chapters.has_v2_tables():
+            d["paragraphs"] = self._list_chapter_paragraphs(chapter_id)
+        else:
+            d["paragraphs"] = []
         return d
+
+    def lock_paragraph(
+        self, paragraph_id: str, *, text: str | None = None, edit_state: str = "USER_LOCKED"
+    ) -> dict:
+        row = self.chapters.set_paragraph_edit_state(paragraph_id, edit_state, text=text)
+        if not row:
+            raise KeyError(paragraph_id)
+        return row
 
     def get_section_evidence(self, section_id: str) -> dict:
         section = self.sections.get(section_id)
@@ -262,3 +277,15 @@ class EditionService:
                     }
                 )
         return out
+
+    def _list_chapter_paragraphs(self, chapter_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            """
+            SELECT paragraph_id, subsection_key, paragraph_type, text, order_index, edit_state
+            FROM paragraphs
+            WHERE chapter_id = ?
+            ORDER BY order_index
+            """,
+            (chapter_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]

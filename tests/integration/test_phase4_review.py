@@ -149,6 +149,33 @@ def test_edition_review_loop_passes_clean_draft(env):
     # Full edition review
     result = reviews.review_edition(produced["edition_id"])
     assert "edition_id" in result
+    assert "full_report" in result
     # After clean revision loop, prefer READY if all passed
     if result["all_passed"]:
         assert result["stage"] == ProjectStage.READY_FOR_EXPORT.value
+
+
+def test_full_report_review_endpoint_records_result(env):
+    conn, store, tmp_path, data = env
+    pdf = build_sample_pdf(tmp_path / "mes-full.pdf")
+    projects = ProjectService(conn)
+    sources = SourceService(conn, store)
+    plans = PlanService(conn, llm_mode="offline")
+    editions = EditionService(
+        conn, llm_mode="offline", vector_root=data / "vector_indexes"
+    )
+    reviews = ReviewService(conn, llm_mode="offline")
+
+    project = projects.create("p4-full")
+    up = sources.upload(project["project_id"], "mes-full.pdf", pdf.read_bytes())
+    sources.process(up["source_id"])
+    plans.analyze(project["project_id"])
+    plans.generate_plan(project["project_id"])
+    plans.approve_outline(project["project_id"])
+    produced = editions.produce(project["project_id"])
+
+    full = reviews.review_full_report(produced["edition_id"])
+    assert full["edition_id"] == produced["edition_id"]
+    assert full["status"] in {"PASSED", "REVISE"}
+    rows = reviews.list_full_report_reviews(produced["edition_id"])
+    assert rows

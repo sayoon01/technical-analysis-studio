@@ -38,3 +38,19 @@ def init_schema(conn: sqlite3.Connection | None = None) -> None:
     conn.commit()
     if own:
         conn.close()
+
+
+def init_schema_v2(conn: sqlite3.Connection | None = None) -> None:
+    """Initialize chapter-first v2 schema set.
+
+    v2 migrations intentionally live in a separate directory to allow
+    phased cutover without altering legacy migration order.
+    """
+    own = conn is None
+    conn = conn or connect()
+    migrations = sorted((Path(__file__).parent / "migrations_v2").glob("*.sql"))
+    for sql_path in migrations:
+        conn.executescript(sql_path.read_text(encoding="utf-8"))
+    conn.commit()
+    if own:
+        conn.close()

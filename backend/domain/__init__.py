@@ -1,12 +1,21 @@
 """Domain package exports."""
 
 from backend.domain.edition import Claim, ReportEdition, SectionImpact
+from backend.domain.blueprint import ChapterBlueprint, ReportBlueprint, SubsectionBlueprint
+from backend.domain.chapter import (
+    Chapter,
+    ChapterDraft,
+    DraftParagraph,
+    SubsectionDraft,
+    VisualIntent,
+)
 from backend.domain.enums import (
     ClaimRelation,
     EditionStatus,
     EvidenceType,
     ImpactDecision,
     IssueSeverity,
+    MetricCategory,
     MetricDirection,
     PageType,
     ProjectStage,
@@ -14,6 +23,7 @@ from backend.domain.enums import (
     SourceRole,
     SourceStatus,
     VerificationStatus,
+    VisualRole,
     VisualType,
 )
 from backend.domain.evidence import (
@@ -25,6 +35,15 @@ from backend.domain.evidence import (
     ProcessFact,
 )
 from backend.domain.project import CorpusSnapshot, Project, Source, SourcePage
+from backend.domain.publication import (
+    ExecutiveSummary,
+    KeyResult,
+    PublicationChapter,
+    PublicationDocument,
+    PublicationFigure,
+    PublicationTable,
+    ReferenceEntry,
+)
 from backend.domain.report_plan import (
     CorpusAnalysis,
     OutlineNode,
@@ -38,22 +57,31 @@ from backend.domain.review import (
     TechnicalReview,
 )
 from backend.domain.section import Section, SectionVersion
+from backend.domain.strategy import EvidenceTheme, ReportStrategy, TitleCandidate
 from backend.domain.visual import VisualRequest
 
 __all__ = [
     "ArchitectureFact",
+    "Chapter",
+    "ChapterBlueprint",
+    "ChapterDraft",
     "Claim",
     "ClaimRelation",
     "ContentBlock",
     "CorpusAnalysis",
+    "DraftParagraph",
+    "EvidenceTheme",
     "CorpusSnapshot",
     "EditorialReview",
     "EditionStatus",
+    "ExecutiveSummary",
     "EvidenceItem",
     "EvidencePack",
     "EvidenceType",
     "ImpactDecision",
     "IssueSeverity",
+    "KeyResult",
+    "MetricCategory",
     "MetricDirection",
     "MetricFact",
     "OutlineNode",
@@ -62,8 +90,15 @@ __all__ = [
     "ProcessFact",
     "Project",
     "ProjectStage",
+    "PublicationChapter",
+    "PublicationDocument",
+    "PublicationFigure",
+    "PublicationTable",
     "ReportEdition",
+    "ReportBlueprint",
     "ReportPlan",
+    "ReportStrategy",
+    "ReferenceEntry",
     "ReviewDecision",
     "ReviewIssue",
     "RevisionResult",
@@ -74,8 +109,13 @@ __all__ = [
     "SourcePage",
     "SourceRole",
     "SourceStatus",
+    "SubsectionBlueprint",
+    "SubsectionDraft",
     "TechnicalReview",
+    "TitleCandidate",
     "VerificationStatus",
+    "VisualIntent",
+    "VisualRole",
     "VisualRequest",
     "VisualType",
 ]

@@ -20,7 +20,10 @@ class Settings:
     ollama_model: str = "gemma4:31b"
     ollama_timeout: float = 900.0
     embedding_model: str = "bge-m3"
-    # llm | offline  — offline는 corpus 기반 deterministic (테스트/무LLM)
+    # adk | llm | offline
+    # - adk: Google ADK workflow runtime
+    # - llm: legacy wrappers
+    # - offline: deterministic test mode
     llm_mode: str = "llm"
     # off | delta — evidence researcher never regenerates full EvidencePack JSON
     evidence_refine_mode: str = "off"
@@ -38,7 +41,10 @@ def load_settings() -> Settings:
         pdf_render_dpi=int(os.getenv("PDF_RENDER_DPI", "200")),
         ocr_enabled=os.getenv("OCR_ENABLED", "true").lower() in ("1", "true", "yes"),
         max_revisions=int(os.getenv("MAX_REVISIONS", "3")),
-        ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
+        ollama_base_url=os.getenv(
+            "OLLAMA_API_BASE",
+            os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
+        ),
         ollama_model=os.getenv("OLLAMA_MODEL", os.getenv("GEMMA_MODEL", "gemma4:31b")),
         ollama_timeout=float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "900")),
         embedding_model=os.getenv(

@@ -1,10 +1,12 @@
 [project]
 name = "technical-analysis-studio"
 version = "0.1.0"
-description = "Expert technical analysis report generation (Ollama agents + deterministic skills)"
+description = "ADK-based evidence-driven technical analysis report studio"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "google-adk>=2,<3",
+  "litellm",
   "fastapi>=0.115",
   "uvicorn[standard]>=0.30",
   "pydantic>=2.7",

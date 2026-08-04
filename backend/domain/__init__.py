@@ -1,6 +1,7 @@
 """Domain package exports."""
 
 from backend.domain.edition import Claim, ReportEdition, SectionImpact
+from backend.domain.outline_review import OutlineIssue, OutlineReview
 from backend.domain.blueprint import ChapterBlueprint, ReportBlueprint, SubsectionBlueprint
 from backend.domain.chapter import (
     Chapter,
@@ -85,6 +86,8 @@ __all__ = [
     "MetricDirection",
     "MetricFact",
     "OutlineNode",
+    "OutlineIssue",
+    "OutlineReview",
     "QuantitativeFinding",
     "PageType",
     "ProcessFact",

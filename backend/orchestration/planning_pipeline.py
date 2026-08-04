@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import sqlite3
 
-from backend.agents.report_planner.agent import ReportPlannerAgent
+from backend.agents.outline_critic.agent import OutlineCriticAgent
+from backend.agents.outline_designer.agent import OutlineDesignerAgent
 from backend.agents.report_strategist.agent import ReportStrategistAgent
 from backend.domain.report_plan import CorpusAnalysis
 from backend.skills.analysis.corpus_context import _role_text_digest
+from backend.skills.analysis.outline_quality_gate import validate_outline
 from backend.domain.enums import SourceRole
 from backend.storage.plan_repository import AnalysisRepository, PlanRepository
 from backend.storage.repositories import ProjectRepository, SourceRepository
@@ -22,7 +24,8 @@ class PlanningPipeline:
     ) -> None:
         self.conn = conn
         self.strategist = ReportStrategistAgent(llm_mode=llm_mode)
-        self.agent = ReportPlannerAgent(llm_mode=llm_mode)
+        self.designer = OutlineDesignerAgent(llm_mode=llm_mode)
+        self.critic = OutlineCriticAgent(llm_mode=llm_mode)
         self.analyses = AnalysisRepository(conn)
         self.plans = PlanRepository(conn)
         self.projects = ProjectRepository(conn)
@@ -50,17 +53,31 @@ class PlanningPipeline:
             self.conn, project_id, SourceRole.PREVIOUS_EDITION.value
         )
         strategy = self.strategist.run(analysis)
-        plan = self.agent.run(
-            analysis,
-            strategy=strategy,
-            source_ids=source_ids,
-            format_notes=format_notes or None,
-            previous_edition_notes=previous_notes or None,
-        )
+        reasons: list[str] = []
+        plan = None
+        review = None
+        for _attempt in range(2):
+            plan = self.designer.run(
+                analysis,
+                strategy=strategy,
+                source_ids=source_ids,
+                format_notes=format_notes or None,
+                previous_edition_notes=previous_notes or None,
+            )
+            review = self.critic.run(plan, strategy)
+            gate = validate_outline(plan)
+            reasons = gate.reasons
+            if gate.passed:
+                break
+        if plan is None:
+            raise ValueError("Failed to generate outline")
+        if reasons:
+            raise ValueError(f"Outline gate failed: {'; '.join(reasons[:3])}")
         saved = self.plans.save_plan(project_id, plan)
         self.projects.update_stage(project_id, "WAITING_FOR_OUTLINE_APPROVAL")
         return {
             **saved,
             "outline_count": len(plan.outline),
+            "outline_review": review.model_dump() if review else None,
             "plan": plan.model_dump(),
         }

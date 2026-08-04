@@ -10,6 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from backend.domain.strategy import ReportStrategy, TitleCandidate
 from backend.domain.visual import VisualRequest
 
 
@@ -145,3 +146,6 @@ class ReportPlan(BaseModel):
     terminology_policy: dict[str, str] = Field(default_factory=dict)
     expected_visuals: list[VisualRequest] = Field(default_factory=list)
     evidence_gaps: list[str] = Field(default_factory=list)
+    title_candidates: list[TitleCandidate] = Field(default_factory=list)
+    central_thesis: str | None = None
+    strategy: ReportStrategy | None = None

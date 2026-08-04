@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 from backend.agents.report_planner.agent import ReportPlannerAgent
+from backend.agents.report_strategist.agent import ReportStrategistAgent
 from backend.domain.report_plan import CorpusAnalysis
 from backend.skills.analysis.corpus_context import _role_text_digest
 from backend.domain.enums import SourceRole
@@ -20,6 +21,7 @@ class PlanningPipeline:
         llm_mode: str | None = None,
     ) -> None:
         self.conn = conn
+        self.strategist = ReportStrategistAgent(llm_mode=llm_mode)
         self.agent = ReportPlannerAgent(llm_mode=llm_mode)
         self.analyses = AnalysisRepository(conn)
         self.plans = PlanRepository(conn)
@@ -47,8 +49,10 @@ class PlanningPipeline:
         previous_notes = _role_text_digest(
             self.conn, project_id, SourceRole.PREVIOUS_EDITION.value
         )
+        strategy = self.strategist.run(analysis)
         plan = self.agent.run(
             analysis,
+            strategy=strategy,
             source_ids=source_ids,
             format_notes=format_notes or None,
             previous_edition_notes=previous_notes or None,

@@ -98,6 +98,14 @@ def test_outline_edit_and_approve(env):
     assert approved["approved"] is True
 
 
+def test_plan_contains_title_candidates(env):
+    conn, store, tmp_path = env
+    _, _, _, plan = _ingest(conn, store, tmp_path, build_sample_pdf, "mes3")
+    candidates = plan["plan"].get("title_candidates") or []
+    assert len(candidates) >= 1
+    assert candidates[0].get("title")
+
+
 def test_no_hardcoded_mes_outline_when_npu(env):
     conn, store, tmp_path = env
     _, _, _, plan = _ingest(conn, store, tmp_path, build_npu_pdf, "npu2")

@@ -7,6 +7,7 @@ import json
 from backend.agents.prompt_loader import load_agent_instruction
 from backend.config import settings
 from backend.domain.report_plan import CorpusAnalysis, ReportPlan
+from backend.domain.strategy import ReportStrategy
 from backend.model_providers.base import (
     LlmError,
     allow_offline_fallback,
@@ -23,12 +24,15 @@ class ReportPlannerAgent:
         self,
         analysis: CorpusAnalysis,
         *,
+        strategy: ReportStrategy | None = None,
         source_ids: list[str] | None = None,
         format_notes: str | None = None,
         previous_edition_notes: str | None = None,
     ) -> ReportPlan:
         if self.llm_mode == "offline":
-            return plan_offline(analysis, source_ids=source_ids)
+            return _apply_strategy(
+                plan_offline(analysis, source_ids=source_ids), strategy
+            )
         try:
             instruction = load_agent_instruction("report_planner")
             extras = []
@@ -52,6 +56,11 @@ class ReportPlannerAgent:
                 f"{analysis.model_dump_json()}"
                 f"{extra_block}"
             )
+            if strategy is not None:
+                user += (
+                    "\n\nUse this ReportStrategy for title and central thesis alignment:\n"
+                    f"{strategy.model_dump_json()}"
+                )
             plan = generate_structured(
                 ReportPlan,
                 instruction,
@@ -62,17 +71,20 @@ class ReportPlannerAgent:
             if not plan.outline:
                 if not allow_offline_fallback():
                     raise LlmError("Planner returned empty outline")
-                return plan_offline(analysis, source_ids=source_ids)
+                return _apply_strategy(
+                    plan_offline(analysis, source_ids=source_ids), strategy
+                )
             # Ensure node_ids / orders exist
-            return _normalize_plan(plan, source_ids=source_ids)
+            normalized = _normalize_plan(plan, source_ids=source_ids)
+            return _apply_strategy(normalized, strategy)
         except LlmError:
             if not allow_offline_fallback():
                 raise
-            return plan_offline(analysis, source_ids=source_ids)
+            return _apply_strategy(plan_offline(analysis, source_ids=source_ids), strategy)
         except Exception:
             if not allow_offline_fallback():
                 raise
-            return plan_offline(analysis, source_ids=source_ids)
+            return _apply_strategy(plan_offline(analysis, source_ids=source_ids), strategy)
 
 
 def _normalize_plan(
@@ -87,4 +99,17 @@ def _normalize_plan(
             node.order = i
         if source_ids and not node.source_scope:
             node.source_scope = list(source_ids)
+    return plan
+
+
+def _apply_strategy(plan: ReportPlan, strategy: ReportStrategy | None) -> ReportPlan:
+    if strategy is None:
+        return plan
+    if strategy.recommended_title:
+        plan.title = strategy.recommended_title
+    if strategy.subtitle:
+        plan.subtitle = strategy.subtitle
+    plan.title_candidates = list(strategy.title_candidates or [])
+    plan.central_thesis = strategy.central_thesis
+    plan.strategy = strategy
     return plan

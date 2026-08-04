@@ -17,6 +17,7 @@ from backend.domain.report_plan import (
     QuantitativeFinding,
     ReportPlan,
 )
+from backend.domain.strategy import TitleCandidate
 
 
 def analyze_offline(context: dict) -> CorpusAnalysis:
@@ -256,6 +257,24 @@ def plan_offline(analysis: CorpusAnalysis, source_ids: list[str] | None = None) 
     if analysis.recommended_report_focus:
         subtitle = " · ".join(analysis.recommended_report_focus[:2])
 
+    title_candidates = [
+        TitleCandidate(
+            title=f"{analysis.main_topic} 기술분석서",
+            style="SOURCE_PRESERVING",
+            rationale="원문 주제를 그대로 반영",
+        ),
+        TitleCandidate(
+            title=f"{analysis.main_topic} 구축 사례 및 성과 분석",
+            style="ANALYTICAL",
+            rationale="구축과 성과 분석을 함께 전달",
+        ),
+        TitleCandidate(
+            title=f"{analysis.main_topic} 분석",
+            style="CONCISE",
+            rationale="핵심을 짧게 표현",
+        ),
+    ]
+
     return ReportPlan(
         title=title[:160],
         subtitle=subtitle,
@@ -270,6 +289,8 @@ def plan_offline(analysis: CorpusAnalysis, source_ids: list[str] | None = None) 
         terminology_policy={},
         expected_visuals=[],
         evidence_gaps=list(analysis.evidence_gaps),
+        title_candidates=title_candidates,
+        central_thesis=(analysis.recommended_report_focus or [None])[0],
     )
 
 

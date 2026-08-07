@@ -167,6 +167,7 @@ def revise_section_offline(
         updated_content=content,
         changes=changes,
         resolved_issue_ids=list(dict.fromkeys(resolved)),
+        provenance="offline",
     )
 
 

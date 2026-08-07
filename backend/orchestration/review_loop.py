@@ -1,10 +1,14 @@
-"""Review–Revise loop with parallel reviewers and quality gate."""
+"""Sequential Review–Revise loop with IssueAggregator and QualityGate.
+
+Technical → Editorial (never parallel). DraftValidator issues feed the gate.
+Silent LLM→offline success is forbidden; explicit offline mode only.
+"""
 
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
-from concurrent.futures import ThreadPoolExecutor
 
 from backend.agents.editorial_reviewer.agent import EditorialReviewerAgent
 from backend.agents.reviser.agent import ReviserAgent
@@ -13,7 +17,8 @@ from backend.config import settings
 from backend.domain.chapter import ChapterDraft, DraftParagraph, SubsectionDraft
 from backend.domain.enums import ProjectStage, ReviewDecision
 from backend.domain.evidence import EvidencePack
-from backend.orchestration.quality_gate import can_finalize, requires_manual_review
+from backend.orchestration.issue_aggregator import aggregate_issues
+from backend.orchestration.quality_gate import decide_gate
 from backend.skills.analysis.claim_extractor import extract_claims
 from backend.skills.analysis.draft_validator import validate_draft
 from backend.storage.edition_repository import (
@@ -25,6 +30,8 @@ from backend.storage.edition_repository import (
 )
 from backend.storage.repositories import ProjectRepository
 from backend.storage.review_repository import ReviewRepository
+
+logger = logging.getLogger(__name__)
 
 
 class ReviewLoop:
@@ -60,6 +67,18 @@ class ReviewLoop:
         all_pass = True
         manual = False
         for section in self.sections.list_for_edition(edition_id):
+            status = (section.get("status") or "").upper()
+            if status == "PASSED":
+                results.append(
+                    {
+                        "section_id": section["section_id"],
+                        "status": "PASSED",
+                        "revision": int(section.get("revision_count") or 1),
+                        "history": [],
+                        "skipped": True,
+                    }
+                )
+                continue
             outcome = self.run_section(section["section_id"])
             results.append(outcome)
             if outcome["status"] != "PASSED":
@@ -76,7 +95,6 @@ class ReviewLoop:
         if all_pass:
             self.editions.update_status(edition_id, "FINALIZING")
             self.projects.update_stage(project_id, ProjectStage.FINALIZING.value)
-            # Phase 4: mark ready for export without full finalization pipeline yet
             self.editions.update_status(edition_id, "READY")
             self.projects.update_stage(project_id, ProjectStage.READY_FOR_EXPORT.value)
             stage = ProjectStage.READY_FOR_EXPORT.value
@@ -100,7 +118,9 @@ class ReviewLoop:
         sections = self.sections.list_for_edition(edition_id)
         if not sections:
             raise ValueError("No sections in edition")
-        merged = "\n\n---\n\n".join((s.get("content_markdown") or "").strip() for s in sections)
+        merged = "\n\n---\n\n".join(
+            (s.get("content_markdown") or "").strip() for s in sections
+        )
         synthetic_section_id = f"FULL-{edition_id}"
         editorial = self.editorial.run(
             section_id=synthetic_section_id,
@@ -136,6 +156,12 @@ class ReviewLoop:
         chapter_row = self.chapters.get_by_key(section["edition_id"], chapter_key)
         chapter_id = chapter_row["chapter_id"] if chapter_row else f"CH-{chapter_key}"
 
+        # First round: always both reviewers (sequential).
+        run_technical = True
+        run_editorial = True
+        technical = None
+        editorial = None
+
         while True:
             self.projects.update_stage(
                 self.editions.get(section["edition_id"])["project_id"],
@@ -145,61 +171,84 @@ class ReviewLoop:
             claims = self.claims.list_for_section(section_id)
             draft = self.chapters.load_draft(chapter_id)
 
-            # 1) Deterministic draft validator (before LLM reviewers)
+            # 1) Deterministic DraftValidator (always after write/revise)
             draft_validation = validate_draft(
                 section_id=section_id,
                 markdown=markdown,
                 pack=pack,
                 draft=draft,
             )
+            self.reviews.save_validator(section_id, draft_validation)
 
-            # 2) Parallel technical + editorial reviewers
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                fut_t = pool.submit(
-                    self.technical.run,
+            # 2) Sequential reviewers — never ThreadPool / parallel
+            if run_technical:
+                logger.info(
+                    "review_loop section=%s revision=%s reviewer=technical sequential",
+                    section_id,
+                    revision,
+                )
+                technical = self.technical.run(
                     section_id=section_id,
                     markdown=markdown,
                     pack=pack,
                     claims=claims,
                 )
-                fut_e = pool.submit(
-                    self.editorial.run,
+            assert technical is not None
+
+            if run_editorial:
+                logger.info(
+                    "review_loop section=%s revision=%s reviewer=editorial sequential",
+                    section_id,
+                    revision,
+                )
+                editorial = self.editorial.run(
                     section_id=section_id,
                     markdown=markdown,
                 )
-                technical = fut_t.result()
-                editorial = fut_e.result()
+            assert editorial is not None
 
-            # Merge deterministic blockers into technical review
-            if draft_validation.issues:
-                technical.issues = list(technical.issues) + list(draft_validation.issues)
-                technical.critical_issue_count = max(
-                    technical.critical_issue_count,
-                    sum(
-                        1
-                        for i in draft_validation.issues
-                        if i.severity.value == "CRITICAL"
-                    ),
-                )
-                if not draft_validation.ok and technical.decision == ReviewDecision.PASS:
-                    technical.decision = ReviewDecision.REVISE
-
+            # 3) Deterministic aggregation + quality gate
+            aggregated = aggregate_issues(
+                technical=technical,
+                editorial=editorial,
+                draft_validation=draft_validation,
+            )
             self.reviews.save_technical(section_id, technical)
             self.reviews.save_editorial(section_id, editorial)
 
+            gate = decide_gate(
+                technical=technical,
+                editorial=editorial,
+                revision_count=revision,
+                max_revisions=self.max_revisions,
+                draft_validation=draft_validation,
+                aggregated=aggregated,
+            )
             round_info = {
                 "revision": revision,
                 "technical_decision": technical.decision.value,
                 "editorial_decision": editorial.decision.value,
+                "gate": gate.value,
                 "unsupported": technical.unsupported_claim_count,
                 "numeric_mismatch": technical.numeric_mismatch_count,
                 "citation_mismatch": technical.citation_mismatch_count,
                 "draft_ok": draft_validation.ok,
                 "internal_markers": draft_validation.internal_marker_count,
+                "blocking_issues": aggregated.blocking_issue_count,
+                "technical_provenance": technical.provenance,
+                "editorial_provenance": editorial.provenance,
+                "rereview_technical": run_technical,
+                "rereview_editorial": run_editorial,
             }
             history.append(round_info)
+            logger.info(
+                "review_loop section=%s gate=%s blocking=%s",
+                section_id,
+                gate.value,
+                aggregated.blocking_issue_count,
+            )
 
-            if can_finalize(technical, editorial, draft_validation=draft_validation):
+            if gate == ReviewDecision.PASS:
                 self.sections.update(section_id, status="PASSED")
                 self.chapters.update_status(chapter_id, "PASSED")
                 return {
@@ -209,9 +258,8 @@ class ReviewLoop:
                     "history": history,
                 }
 
-            if requires_manual_review(
-                technical, editorial, revision, self.max_revisions
-            ):
+            if gate == ReviewDecision.MANUAL_REVIEW:
+                # Never silent-PASS when revision budget exhausted with blockers
                 self.sections.update(section_id, status="MANUAL_REVIEW")
                 self.chapters.update_status(chapter_id, "MANUAL_REVIEW")
                 return {
@@ -222,13 +270,14 @@ class ReviewLoop:
                     "open_issues": self.reviews.open_issues(section_id),
                 }
 
-            # 3) Revise
+            # 4) Targeted revise (gate == REVISE)
             self.projects.update_stage(
                 self.editions.get(section["edition_id"])["project_id"],
                 ProjectStage.REVISING.value,
             )
             self.sections.update(section_id, status="REVISING")
             revision += 1
+            locked_texts = self.chapters.list_locked_paragraph_texts(chapter_id)
             result = self.reviser.run(
                 title=section["title"],
                 objective=section.get("objective") or "",
@@ -237,10 +286,11 @@ class ReviewLoop:
                 technical=technical,
                 editorial=editorial,
                 revision=revision,
+                aggregated_issues=list(aggregated.issues),
+                locked_paragraph_texts=locked_texts or None,
             )
             self.reviews.mark_issues_resolved(result.resolved_issue_ids)
 
-            # Refresh claims from revised content
             self.claims.delete_for_section(section_id)
             for claim, eids in extract_claims(
                 edition_id=section["edition_id"],
@@ -263,7 +313,6 @@ class ReviewLoop:
                 status="DRAFT",
             )
 
-            # Persist revised structured chapter when v2 tables exist
             revised_draft = _draft_from_markdown(
                 chapter_id=chapter_id,
                 title=section["title"],
@@ -280,6 +329,14 @@ class ReviewLoop:
                 summary=f"revision {revision}",
             )
             chapter_row = self.chapters.get_by_key(section["edition_id"], chapter_key)
+
+            # Relevant reviewer re-review (deterministic); DraftValidator always re-runs
+            run_technical = aggregated.rereview_technical
+            run_editorial = aggregated.rereview_editorial
+            # If neither flagged (shouldn't happen on REVISE), re-run both safely
+            if not run_technical and not run_editorial:
+                run_technical = True
+                run_editorial = True
 
 
 def _draft_from_markdown(

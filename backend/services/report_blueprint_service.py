@@ -157,8 +157,13 @@ class ReportBlueprintService:
         draft: ChapterDraft,
         summary: str,
     ) -> ReportMemory:
-        """Update structured continuity after a chapter is finalized as draft."""
+        """Update structured continuity after a chapter is Quality-Gate PASSED.
+
+        Idempotent on chapter_id so Resume reconstruction does not double-count.
+        """
         updated = memory.model_copy(deep=True)
+        if any(s.chapter_id == draft.chapter_id for s in updated.chapter_summaries):
+            return updated
         updated.chapter_summaries.append(
             ChapterSummaryMemory(
                 chapter_id=draft.chapter_id,

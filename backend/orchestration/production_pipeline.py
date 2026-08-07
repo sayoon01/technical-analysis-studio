@@ -7,10 +7,11 @@ import uuid
 from pathlib import Path
 
 from backend.agents.chapter_writer.agent import ChapterWriterAgent, render_chapter_markdown
-from backend.domain.chapter import ReportMemory
+from backend.domain.chapter import ChapterDraft, ReportMemory
 from backend.domain.enums import ImpactDecision, ProjectStage, SourceRole
 from backend.domain.evidence import EvidencePack
 from backend.orchestration.impact_analyzer import ImpactAnalyzer
+from backend.orchestration.review_loop import ReviewLoop
 from backend.skills.analysis.claim_extractor import extract_claims
 from backend.skills.analysis.corpus_context import _role_text_digest
 from backend.skills.analysis.draft_validator import validate_draft
@@ -49,6 +50,7 @@ class ProductionPipeline:
         self.evidence_packs = EvidencePackService(conn, vector_root=vector_root)
         self.blueprints = ReportBlueprintService()
         self.writer = ChapterWriterAgent(llm_mode=llm_mode)
+        self.review_loop = ReviewLoop(conn, llm_mode=llm_mode)
 
     def run(self, project_id: str, *, parent_edition_id: str | None = None) -> dict:
         project = self.projects.get(project_id)
@@ -90,7 +92,7 @@ class ProductionPipeline:
         prev_summary = None
         for i, node in enumerate(nodes):
             next_node = nodes[i + 1] if i + 1 < len(nodes) else None
-            section, report_memory = self._produce_section(
+            section, draft = self._produce_section(
                 project_id=project_id,
                 edition_id=edition["edition_id"],
                 node=node,
@@ -105,6 +107,13 @@ class ProductionPipeline:
                 chapter=chapter_by_node.get(node["node_id"]),
                 node_order=i + 1,
             )
+            # Phase 4: Review → Quality Gate PASS 이후에만 ReportMemory 반영
+            section, report_memory = self._review_and_remember(
+                section=section,
+                draft=draft,
+                report_memory=report_memory,
+                node=node,
+            )
             produced.append(
                 {
                     "section_id": section["section_id"],
@@ -115,8 +124,6 @@ class ProductionPipeline:
             prev_summary = (section.get("content_markdown") or "")[:400]
 
         self.editions.update_status(edition["edition_id"], "IN_REVIEW")
-        # Phase 3 ends at draft sections ready for review; stage stays PRODUCING
-        # until Phase 4 review loop — mark project REVIEWING for clarity
         self.projects.update_stage(project_id, ProjectStage.REVIEWING.value)
 
         return {
@@ -178,6 +185,7 @@ class ProductionPipeline:
             if prior and self._section_is_complete(prior):
                 skipped += 1
                 prev_summary = (prior.get("content_markdown") or "")[:400]
+                # Resume: PASSED만 memory 재구성 (중복 chapter_id는 extend에서 no-op)
                 report_memory = self._memory_from_skipped_section(
                     report_memory, prior, node
                 )
@@ -191,7 +199,7 @@ class ProductionPipeline:
                 )
                 continue
 
-            section, report_memory = self._produce_section(
+            section, draft = self._produce_section(
                 project_id=project_id,
                 edition_id=edition_id,
                 node=node,
@@ -206,6 +214,12 @@ class ProductionPipeline:
                 format_notes=format_notes,
                 chapter=chapter_by_node.get(node["node_id"]),
                 node_order=i + 1,
+            )
+            section, report_memory = self._review_and_remember(
+                section=section,
+                draft=draft,
+                report_memory=report_memory,
+                node=node,
             )
             rewritten += 1
             produced.append(
@@ -244,8 +258,10 @@ class ProductionPipeline:
     def _memory_from_skipped_section(
         self, memory: ReportMemory, section: dict, node: dict
     ) -> ReportMemory:
-        from backend.domain.chapter import ChapterDraft
-
+        """Resume/inherit: only finalized (PASSED) chapters enter ReportMemory."""
+        status = (section.get("status") or "").upper()
+        if status != "PASSED":
+            return memory
         stub = ChapterDraft(
             chapter_id=f"CH-{node.get('node_id')}",
             title=section.get("title") or node.get("title") or "",
@@ -258,6 +274,31 @@ class ProductionPipeline:
             draft=stub,
             summary=(section.get("content_markdown") or "")[:400],
         )
+
+    def _review_and_remember(
+        self,
+        *,
+        section: dict,
+        draft: ChapterDraft,
+        report_memory: ReportMemory,
+        node: dict,
+    ) -> tuple[dict, ReportMemory]:
+        """Run sequential ReviewLoop; extend ReportMemory only on Quality Gate PASS."""
+        outcome = self.review_loop.run_section(section["section_id"])
+        refreshed = self.sections.get(section["section_id"]) or section
+        if outcome.get("status") != "PASSED":
+            return refreshed, report_memory
+        chapter_key = (
+            refreshed.get("outline_node_id") or node.get("node_id") or draft.chapter_id
+        )
+        chapter_row = self.chapters.get_by_key(refreshed["edition_id"], chapter_key)
+        chapter_id = chapter_row["chapter_id"] if chapter_row else draft.chapter_id
+        final_draft = self.chapters.load_draft(chapter_id) or draft
+        md = refreshed.get("content_markdown") or ""
+        memory = self.blueprints.extend_report_memory(
+            report_memory, draft=final_draft, summary=md[:400]
+        )
+        return refreshed, memory
 
     def run_incremental(
         self,
@@ -362,7 +403,7 @@ class ProductionPipeline:
                 decision = ImpactDecision.ADD_SECTION
 
             if decision in rewrite_decisions or parent_sec is None:
-                section, report_memory = self._produce_section(
+                section, draft = self._produce_section(
                     project_id=project_id,
                     edition_id=edition["edition_id"],
                     node=node,
@@ -376,6 +417,12 @@ class ProductionPipeline:
                     format_notes=format_notes,
                     chapter=chapter_by_node.get(node["node_id"]),
                     node_order=i + 1,
+                )
+                section, report_memory = self._review_and_remember(
+                    section=section,
+                    draft=draft,
+                    report_memory=report_memory,
+                    node=node,
                 )
                 rewritten += 1
                 action = decision.value
@@ -400,7 +447,7 @@ class ProductionPipeline:
                 kept += 1
                 action = decision.value
             else:
-                section, report_memory = self._produce_section(
+                section, draft = self._produce_section(
                     project_id=project_id,
                     edition_id=edition["edition_id"],
                     node=node,
@@ -414,6 +461,12 @@ class ProductionPipeline:
                     format_notes=format_notes,
                     chapter=chapter_by_node.get(node["node_id"]),
                     node_order=i + 1,
+                )
+                section, report_memory = self._review_and_remember(
+                    section=section,
+                    draft=draft,
+                    report_memory=report_memory,
+                    node=node,
                 )
                 rewritten += 1
                 action = decision.value
@@ -631,7 +684,7 @@ class ProductionPipeline:
         format_notes: str | None = None,
         chapter=None,
         node_order: int = 0,
-    ) -> tuple[dict, ReportMemory]:
+    ) -> tuple[dict, ChapterDraft]:
         memory = report_memory or ReportMemory()
         units = chapter_units if chapter_units is not None else (
             [chapter] if chapter is not None else []
@@ -746,7 +799,6 @@ class ProductionPipeline:
             revision_count=1,
             evidence_pack_id=pack_id,
         )
-        memory = self.blueprints.extend_report_memory(
-            memory, draft=draft, summary=markdown[:400]
-        )
-        return section_row, memory
+        # ReportMemory is NOT updated here — only after Quality Gate PASS
+        # via _review_and_remember (Phase 4 canonical policy).
+        return section_row, draft

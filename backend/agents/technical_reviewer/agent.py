@@ -1,4 +1,8 @@
-"""TechnicalReviewerAgent."""
+"""TechnicalReviewerAgent — technical accuracy / evidence grounding only.
+
+No silent offline fallback: llm/adk failure raises. Explicit TAS_LLM_MODE=offline
+uses deterministic review_technical_offline with provenance=offline.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +12,7 @@ from backend.agents.prompt_loader import load_agent_instruction
 from backend.config import settings
 from backend.domain.evidence import EvidencePack
 from backend.domain.review import TechnicalReview
-from backend.model_providers.base import LlmError, allow_offline_fallback, generate_structured
+from backend.model_providers.base import LlmError, generate_structured
 from backend.skills.analysis.review_offline import review_technical_offline
 
 
@@ -31,7 +35,7 @@ class TechnicalReviewerAgent:
             claims=claims,
         )
         if self.llm_mode == "offline":
-            return base
+            return base.model_copy(update={"provenance": "offline"})
         try:
             instruction = load_agent_instruction("technical_reviewer")
             user = json.dumps(
@@ -64,12 +68,9 @@ class TechnicalReviewerAgent:
             )
             if base.issues and not refined.issues:
                 refined.issues = base.issues
+            refined.provenance = "online"
             return refined
         except LlmError:
-            if not allow_offline_fallback():
-                raise
-            return base
-        except Exception:
-            if not allow_offline_fallback():
-                raise
-            return base
+            raise
+        except Exception as exc:
+            raise LlmError(f"TechnicalReviewer failed: {exc}") from exc

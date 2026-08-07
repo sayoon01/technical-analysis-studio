@@ -634,3 +634,17 @@ class ChapterRepository:
             (chapter_id,),
         ).fetchone()
         return bool(row)
+
+    def list_locked_paragraph_texts(self, chapter_id: str) -> list[str]:
+        """USER_LOCKED paragraph bodies for Reviser constraint (v2 paragraphs table)."""
+        if not self.has_v2_tables():
+            return []
+        rows = self.conn.execute(
+            """
+            SELECT text FROM paragraphs
+            WHERE chapter_id = ? AND edit_state = 'USER_LOCKED'
+            ORDER BY order_index
+            """,
+            (chapter_id,),
+        ).fetchall()
+        return [str(r["text"] or "") for r in rows if (r["text"] or "").strip()]

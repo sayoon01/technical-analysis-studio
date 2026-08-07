@@ -24,6 +24,23 @@ class ReviewRepository:
     def save_editorial(self, section_id: str, review: EditorialReview) -> str:
         return self._save(section_id, "editorial", review.decision.value, review.model_dump(mode="json"), review.issues)
 
+    def save_validator(self, section_id: str, draft_validation) -> str:
+        """Persist DraftValidator issues (reviewer_type=validator). Not an LLM review."""
+        from backend.domain.enums import ReviewDecision
+
+        decision = (
+            ReviewDecision.PASS.value
+            if getattr(draft_validation, "ok", True)
+            else ReviewDecision.REVISE.value
+        )
+        payload = (
+            draft_validation.model_dump(mode="json")
+            if hasattr(draft_validation, "model_dump")
+            else dict(draft_validation)
+        )
+        issues = list(getattr(draft_validation, "issues", []) or [])
+        return self._save(section_id, "validator", decision, payload, issues)
+
     def save_editorial_full_report(self, edition_id: str, review: EditorialReview) -> str:
         synthetic_section_id = f"FULL-{edition_id}"
         return self._save(
@@ -105,7 +122,16 @@ class ReviewRepository:
             """,
             (section_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            # Frontend compatibility: message || detail || description
+            if not d.get("message"):
+                d["message"] = d.get("description") or ""
+            if not d.get("detail"):
+                d["detail"] = d.get("description") or ""
+            out.append(d)
+        return out
 
     def list_full_report_reviews(self, edition_id: str) -> list[dict]:
         synthetic_section_id = f"FULL-{edition_id}"

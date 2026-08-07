@@ -1,4 +1,8 @@
-"""Review and revision schemas."""
+"""Review and revision schemas.
+
+Canonical ReviewIssue is the single Domain contract for reviewer / validator
+findings. API/Persistence may map fields (e.g. description → message).
+"""
 
 from __future__ import annotations
 
@@ -10,13 +14,15 @@ from backend.domain.enums import IssueSeverity, ReviewDecision
 class ReviewIssue(BaseModel):
     issue_id: str
     section_id: str
-    reviewer_type: str
+    reviewer_type: str  # technical | editorial | validator
     severity: IssueSeverity
     issue_type: str
     paragraph_id: str | None = None
     description: str
     recommendation: str
     status: str = "OPEN"
+    # Optional evidence refs when relevant (not exposed as new Frontend enum)
+    evidence_refs: list[str] = Field(default_factory=list)
 
 
 class TechnicalReview(BaseModel):
@@ -27,6 +33,8 @@ class TechnicalReview(BaseModel):
     citation_mismatch_count: int = 0
     numeric_mismatch_count: int = 0
     critical_issue_count: int = 0
+    # online | offline (explicit mode) — never silent fallback
+    provenance: str = "online"
 
 
 class EditorialReview(BaseModel):
@@ -36,6 +44,7 @@ class EditorialReview(BaseModel):
     promotional_phrase_count: int = 0
     terminology_inconsistency_count: int = 0
     critical_issue_count: int = 0
+    provenance: str = "online"
 
 
 class RevisionResult(BaseModel):
@@ -43,3 +52,4 @@ class RevisionResult(BaseModel):
     updated_content: str
     changes: list[dict] = Field(default_factory=list)
     resolved_issue_ids: list[str] = Field(default_factory=list)
+    provenance: str = "online"

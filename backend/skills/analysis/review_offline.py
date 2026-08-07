@@ -141,6 +141,7 @@ def review_technical_offline(
         citation_mismatch_count=citation_mismatch,
         numeric_mismatch_count=numeric_mismatch,
         critical_issue_count=critical,
+        provenance="offline",
     )
 
 
@@ -249,6 +250,7 @@ def review_editorial_offline(
         promotional_phrase_count=promo,
         terminology_inconsistency_count=0,
         critical_issue_count=critical,
+        provenance="offline",
     )
 
 

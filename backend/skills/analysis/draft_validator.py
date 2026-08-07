@@ -254,7 +254,7 @@ def _issue(
     return ReviewIssue(
         issue_id=f"ISS-{uuid.uuid4().hex[:8].upper()}",
         section_id=section_id,
-        reviewer_type="deterministic",
+        reviewer_type="validator",
         severity=severity,
         issue_type=issue_type,
         paragraph_id=paragraph_id,

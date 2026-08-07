@@ -132,7 +132,7 @@ Visual Planner Agent는 기본 범위가 아니다. Planner/Writer의 `VisualReq
 단계 확인, Agent 실행, 입력 조립, 스키마 검증, DB/Artifact 저장, 목차 승인 대기,  
 장별 **순차** 실행, Reviewer **순차**, 수정 횟수, 재시도·재개, Edition 생성.  
 전체 순서를 LLM에 맡기지 않는다.  
-(`report_orchestrator.py` Dead — Phase 0 삭제 후보)
+(`report_orchestrator.py` — Phase 0에서 삭제됨)
 
 ---
 

@@ -87,6 +87,55 @@ Workflow가 Agent 실행 순서를 결정한다.
 
 LLM Agent가 자유롭게 다음 Agent를 선택하지 않는다.
 
+## D. Change and Duplication Policy
+
+기존 프로젝트를 우선 활용한다.
+
+새 구현을 추가하기 전에 반드시 동일하거나 유사한 책임의
+기존 구현이 있는지 먼저 확인한다.
+
+기존 구현에 대해 다음을 우선 판단한다.
+
+- KEEP
+- REFACTOR
+- MOVE
+- MERGE
+- REPLACE
+- REMOVE
+
+기존 Canonical Owner를 확장하거나 정리해서 해결할 수 있다면
+동일 책임의 새 구현을 병렬로 추가하지 않는다.
+
+다음과 같은 구조는 특별한 이유 없이 만들지 않는다.
+
+- agents_v2/
+- workflows_new/
+- services_v2/
+- repository_new/
+- prompts_v2/
+- writer_new.py
+- reviewer_v2.py
+
+새 파일 또는 새 모듈이 실제로 필요한 경우에는 허용한다.
+
+단 다음 조건을 만족해야 한다.
+
+1. 기존 코드로 책임 있게 수용하기 어려운 이유가 명확할 것
+2. 기존 Canonical Owner와 책임이 중복되지 않을 것
+3. 새로운 Runtime Path를 병렬로 만들지 않을 것
+4. 기존 구현을 대체하는 경우 제거 또는 통합 계획이 있을 것
+5. 프로젝트의 기존 Directory 책임과 일치할 것
+
+목표는 “새 파일을 만들지 않는 것”이 아니라
+“같은 역할의 구현이 여러 군데 생기지 않도록 하는 것”이다.
+
+Architecture Review는 대규모 구조 변경,
+새 Runtime Layer 도입,
+Canonical Owner 변경이 필요한 경우에만 수행한다.
+
+일반적인 구현 세부사항이나 테스트 파일 추가까지
+매번 별도 Architecture Review를 요구하지 않는다.
+
 # 3. No DAG / No Parallel Chapter Writing / No Parallel Reviewers
 
 이 프로젝트에서는 Chapter DAG Scheduler를 만들지 않는다.

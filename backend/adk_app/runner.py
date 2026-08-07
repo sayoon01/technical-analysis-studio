@@ -1,6 +1,10 @@
 """ADK workflow runner entrypoint.
 
-Planning/production orchestration will be migrated to this runner in phases.
+Phase 1: Corpus / Source Intelligence no longer runs through this runner.
+Canonical path is AnalysisPipeline → CorpusAnalystAgent.
+
+This scaffold remains for Phase 6 ADK execution migration (model factory +
+placeholder envelopes for non-corpus workflows).
 """
 
 from __future__ import annotations
@@ -9,7 +13,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.adk_app.model_factory import build_litellm_model
-from backend.adk_app.workflows.planning_workflow import run_corpus_analysis
 
 
 @dataclass(slots=True)
@@ -27,20 +30,8 @@ class AdkRunner:
         return build_litellm_model(model_id=model_id)
 
     def run(self, config: AdkRunConfig) -> dict[str, Any]:
-        if config.workflow_name == "planning_workflow.corpus_analysis":
-            analysis = run_corpus_analysis(
-                (config.payload or {}).get("context") or {},
-                mode=((config.payload or {}).get("mode") or "adk"),
-            )
-            return {
-                "workflow_name": config.workflow_name,
-                "project_id": config.project_id,
-                "edition_id": config.edition_id,
-                "status": "COMPLETED",
-                "output": analysis.model_dump(),
-            }
-
-        # Placeholder envelope for remaining phase workflows.
+        # Corpus analysis was removed in Phase 1 (ONE_CANONICAL_PATH via
+        # CorpusAnalystAgent). Remaining workflows stay placeholder until Phase 6.
         return {
             "workflow_name": config.workflow_name,
             "project_id": config.project_id,

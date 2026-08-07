@@ -21,9 +21,10 @@ class Settings:
     ollama_timeout: float = 900.0
     embedding_model: str = "bge-m3"
     # adk | llm | offline
-    # - adk: Google ADK workflow runtime
-    # - llm: legacy wrappers
-    # - offline: deterministic test mode
+    # - adk: compatibility alias (Phase 1: same CorpusAnalyst path as llm;
+    #        Phase 6 will own real ADK Agent execution)
+    # - llm: Canonical model_providers path
+    # - offline: deterministic / explicit test mode
     llm_mode: str = "llm"
     # off | delta — evidence researcher never regenerates full EvidencePack JSON
     evidence_refine_mode: str = "off"

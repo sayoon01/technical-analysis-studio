@@ -16,12 +16,21 @@ from backend.skills.analysis.offline_planner import analyze_offline
 
 
 class CorpusAnalystAgent:
+    """Canonical Source Intelligence owner.
+
+    TAS_LLM_MODE:
+    - offline → deterministic analyze_offline
+    - llm / adk → generate_structured via model_providers
+      (adk is a compatibility alias until Phase 6 ADK execution ownership)
+    """
+
     def __init__(self, *, llm_mode: str | None = None) -> None:
         self.llm_mode = (llm_mode or settings.llm_mode).lower()
 
     def run(self, context: dict) -> CorpusAnalysis:
         if self.llm_mode == "offline":
             return analyze_offline(context)
+        # llm and adk share this path — no separate ADK corpus workflow.
         try:
             instruction = load_agent_instruction("corpus_analyst")
             pack = context.get("llm_pack") or {

@@ -136,6 +136,16 @@ def generate_structured(
             "keep_ids/drop_ids/ranking are string arrays; conflicts is an array of "
             '{"description":"...","evidence_ids":["…"]}.'
         )
+    elif name == "ChapterDraft":
+        schema_hint = (
+            "Respond with a single JSON object matching ChapterDraft keys only:\n"
+            f"{json.dumps(fields, ensure_ascii=False)}\n"
+            "subsections is an array of {subsection_id,title,paragraphs[]} where "
+            "paragraphs items are {paragraph_id,paragraph_type,text,evidence_ids[]}. "
+            "paragraph_type must be FACT|SYNTHESIS|ANALYSIS|LIMITATION. "
+            "Do not wrap the object under chapter_draft/draft. "
+            "Do not invent evidence_ids absent from the provided Evidence Pack."
+        )
     else:
         schema_hint = (
             "Respond with a single JSON object using these keys only:\n"
@@ -160,6 +170,12 @@ def generate_structured(
                 model=model,
                 temperature=float(cfg.get("temperature", 0.2)),
             )
+            if name == "ChapterDraft" and isinstance(raw, dict):
+                # Tolerate legacy wrapped payloads without a second gateway.
+                if isinstance(raw.get("chapter_draft"), dict):
+                    raw = raw["chapter_draft"]
+                elif isinstance(raw.get("draft"), dict):
+                    raw = raw["draft"]
             return schema.model_validate(raw)
         except (LlmError, ValidationError, json.JSONDecodeError) as e:
             last_err = e

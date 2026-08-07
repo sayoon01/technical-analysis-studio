@@ -38,13 +38,58 @@ def validate_draft(
     markdown: str,
     pack: EvidencePack,
     draft: ChapterDraft | None = None,
+    target_words: int = 0,
 ) -> DraftValidationResult:
-    """Code-level checks that must pass before (or alongside) LLM review."""
+    """Code-level checks that must pass before (or alongside) LLM review.
+
+    Does not judge technical accuracy or editorial quality (Reviewer agents).
+    """
     issues: list[ReviewIssue] = []
     marker_count = 0
     empty_count = 0
     missing_eid = 0
     forbidden_count = 0
+
+    body = (markdown or "").strip()
+    if not body:
+        empty_count += 1
+        issues.append(
+            _issue(
+                section_id,
+                "EMPTY_CONTENT",
+                IssueSeverity.CRITICAL,
+                "초안 본문이 비어 있음",
+                "근거가 있는 본문을 작성",
+            )
+        )
+
+    if target_words > 0:
+        # Approximate Korean "words" as whitespace-split tokens; soft length gate only.
+        approx = len(re.findall(r"\S+", body))
+        # Characters matter more for KO; also use char length vs target_words heuristic.
+        char_len = len(body)
+        min_chars = max(80, int(target_words * 0.35))
+        max_chars = int(target_words * 3.5) if target_words else 0
+        if char_len < min_chars and approx < max(20, int(target_words * 0.25)):
+            issues.append(
+                _issue(
+                    section_id,
+                    "LENGTH_BELOW_TARGET",
+                    IssueSeverity.MAJOR,
+                    f"분량이 목표({target_words}) 대비 과도하게 부족 (chars={char_len})",
+                    "목표 분량에 맞게 핵심 분석·근거를 보강",
+                )
+            )
+        if max_chars and char_len > max_chars:
+            issues.append(
+                _issue(
+                    section_id,
+                    "LENGTH_ABOVE_TARGET",
+                    IssueSeverity.MINOR,
+                    f"분량이 목표({target_words}) 대비 과도 (chars={char_len})",
+                    "중복을 줄이고 현재 Chapter 범위만 유지",
+                )
+            )
 
     comments = _HTML_COMMENT_RE.findall(markdown or "")
     if comments:

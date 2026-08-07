@@ -7,11 +7,13 @@ import uuid
 from pathlib import Path
 
 from backend.agents.chapter_writer.agent import ChapterWriterAgent, render_chapter_markdown
+from backend.domain.chapter import ReportMemory
 from backend.domain.enums import ImpactDecision, ProjectStage, SourceRole
 from backend.domain.evidence import EvidencePack
 from backend.orchestration.impact_analyzer import ImpactAnalyzer
 from backend.skills.analysis.claim_extractor import extract_claims
 from backend.skills.analysis.corpus_context import _role_text_digest
+from backend.skills.analysis.draft_validator import validate_draft
 from backend.skills.analysis.inherit_scrubber import scrub_inherited_section
 from backend.services.evidence_pack_service import EvidencePackService
 from backend.services.report_blueprint_service import ReportBlueprintService
@@ -84,17 +86,21 @@ class ProductionPipeline:
         chapter_units = self.blueprints.build_from_outline(outline_nodes=nodes)
         chapter_by_node = {c.node_id: c for c in chapter_units}
         produced = []
+        report_memory = ReportMemory()
         prev_summary = None
         for i, node in enumerate(nodes):
-            next_obj = nodes[i + 1]["objective"] if i + 1 < len(nodes) else None
-            section = self._produce_section(
+            next_node = nodes[i + 1] if i + 1 < len(nodes) else None
+            section, report_memory = self._produce_section(
                 project_id=project_id,
                 edition_id=edition["edition_id"],
                 node=node,
                 source_ids=source_ids,
-                plan_title=plan.get("title"),
+                plan=plan,
+                chapter_units=chapter_units,
+                report_memory=report_memory,
                 prev_summary=prev_summary,
-                next_objective=next_obj,
+                next_title=next_node.get("title") if next_node else None,
+                next_objective=next_node.get("objective") if next_node else None,
                 format_notes=format_notes,
                 chapter=chapter_by_node.get(node["node_id"]),
                 node_order=i + 1,
@@ -161,16 +167,20 @@ class ProductionPipeline:
         chapter_units = self.blueprints.build_from_outline(outline_nodes=nodes)
         chapter_by_node = {c.node_id: c for c in chapter_units}
         produced = []
+        report_memory = ReportMemory()
         prev_summary = None
         skipped = 0
         rewritten = 0
 
         for i, node in enumerate(nodes):
-            next_obj = nodes[i + 1]["objective"] if i + 1 < len(nodes) else None
+            next_node = nodes[i + 1] if i + 1 < len(nodes) else None
             prior = by_node.get(node["node_id"])
             if prior and self._section_is_complete(prior):
                 skipped += 1
                 prev_summary = (prior.get("content_markdown") or "")[:400]
+                report_memory = self._memory_from_skipped_section(
+                    report_memory, prior, node
+                )
                 produced.append(
                     {
                         "section_id": prior["section_id"],
@@ -181,14 +191,17 @@ class ProductionPipeline:
                 )
                 continue
 
-            section = self._produce_section(
+            section, report_memory = self._produce_section(
                 project_id=project_id,
                 edition_id=edition_id,
                 node=node,
                 source_ids=source_ids,
-                plan_title=plan.get("title"),
+                plan=plan,
+                chapter_units=chapter_units,
+                report_memory=report_memory,
                 prev_summary=prev_summary,
-                next_objective=next_obj,
+                next_title=next_node.get("title") if next_node else None,
+                next_objective=next_node.get("objective") if next_node else None,
                 existing_section_id=prior["section_id"] if prior else None,
                 format_notes=format_notes,
                 chapter=chapter_by_node.get(node["node_id"]),
@@ -227,6 +240,24 @@ class ProductionPipeline:
             return False
         md = (section.get("content_markdown") or "").strip()
         return len(md) >= 40
+
+    def _memory_from_skipped_section(
+        self, memory: ReportMemory, section: dict, node: dict
+    ) -> ReportMemory:
+        from backend.domain.chapter import ChapterDraft
+
+        stub = ChapterDraft(
+            chapter_id=f"CH-{node.get('node_id')}",
+            title=section.get("title") or node.get("title") or "",
+            lead="",
+            key_takeaways=[],
+            limitations=[],
+        )
+        return self.blueprints.extend_report_memory(
+            memory,
+            draft=stub,
+            summary=(section.get("content_markdown") or "")[:400],
+        )
 
     def run_incremental(
         self,
@@ -292,7 +323,6 @@ class ProductionPipeline:
         self.projects.patch(project_id, current_edition_id=edition["edition_id"])
 
         parent_sections = self.sections.list_for_edition(parent_edition_id)
-        # Map parent sections by outline node / title for inheritance
         parent_by_node = {s["outline_node_id"]: s for s in parent_sections}
         parent_by_title = {s["title"]: s for s in parent_sections}
 
@@ -313,9 +343,10 @@ class ProductionPipeline:
         nodes = outline["nodes"]
         chapter_units = self.blueprints.build_from_outline(outline_nodes=nodes)
         chapter_by_node = {c.node_id: c for c in chapter_units}
+        report_memory = ReportMemory()
         prev_summary = None
         for i, node in enumerate(nodes):
-            next_obj = nodes[i + 1]["objective"] if i + 1 < len(nodes) else None
+            next_node = nodes[i + 1] if i + 1 < len(nodes) else None
             parent_sec = parent_by_node.get(node["node_id"]) or parent_by_title.get(
                 node["title"]
             )
@@ -327,21 +358,24 @@ class ProductionPipeline:
                 parent_chapter_id = f"CH-{parent_sec['outline_node_id']}"
                 if self.chapters.chapter_has_locked_paragraph(parent_chapter_id):
                     decision = ImpactDecision.KEEP
-            # New outline nodes not in parent → write fresh
             if parent_sec is None:
                 decision = ImpactDecision.ADD_SECTION
 
             if decision in rewrite_decisions or parent_sec is None:
-                section = self._produce_section(
+                section, report_memory = self._produce_section(
                     project_id=project_id,
                     edition_id=edition["edition_id"],
                     node=node,
                     source_ids=all_source_ids,
-                    plan_title=plan.get("title"),
+                    plan=plan,
+                    chapter_units=chapter_units,
+                    report_memory=report_memory,
                     prev_summary=prev_summary,
-                    next_objective=next_obj,
+                    next_title=next_node.get("title") if next_node else None,
+                    next_objective=next_node.get("objective") if next_node else None,
                     format_notes=format_notes,
                     chapter=chapter_by_node.get(node["node_id"]),
+                    node_order=i + 1,
                 )
                 rewritten += 1
                 action = decision.value
@@ -354,26 +388,32 @@ class ProductionPipeline:
                     source_ids=all_source_ids,
                     scrub=(decision != ImpactDecision.KEEP),
                 )
-                # Always scrub unsupported inheritance even on KEEP
                 if decision == ImpactDecision.KEEP:
                     section = self._scrub_existing(
                         project_id=project_id,
                         section=section,
                         source_ids=all_source_ids,
                     )
+                report_memory = self._memory_from_skipped_section(
+                    report_memory, section, node
+                )
                 kept += 1
                 action = decision.value
             else:
-                section = self._produce_section(
+                section, report_memory = self._produce_section(
                     project_id=project_id,
                     edition_id=edition["edition_id"],
                     node=node,
                     source_ids=all_source_ids,
-                    plan_title=plan.get("title"),
+                    plan=plan,
+                    chapter_units=chapter_units,
+                    report_memory=report_memory,
                     prev_summary=prev_summary,
-                    next_objective=next_obj,
+                    next_title=next_node.get("title") if next_node else None,
+                    next_objective=next_node.get("objective") if next_node else None,
                     format_notes=format_notes,
                     chapter=chapter_by_node.get(node["node_id"]),
+                    node_order=i + 1,
                 )
                 rewritten += 1
                 action = decision.value
@@ -427,7 +467,6 @@ class ProductionPipeline:
     ) -> dict:
         section_id = f"SEC-{uuid.uuid4().hex[:10].upper()}"
         markdown = parent_section.get("content_markdown") or ""
-        # Build pack for current corpus (for scrub + claim links)
         pack = self.evidence_packs.build_for_chapter(
             project_id=project_id,
             section_id=section_id,
@@ -546,26 +585,34 @@ class ProductionPipeline:
             "required_evidence_types": [],
             "level": 1,
         }
+        plan = self.plans.latest_plan(project_id)
         outline = self.plans.get_outline(project_id)
+        nodes = (outline or {}).get("nodes") or []
+        chapter_units = self.blueprints.build_from_outline(outline_nodes=nodes)
+        chapter_by_node = {c.node_id: c for c in chapter_units}
         if outline:
             match = next(
-                (n for n in outline["nodes"] if n["node_id"] == section["outline_node_id"]),
+                (n for n in nodes if n["node_id"] == section["outline_node_id"]),
                 None,
             )
             if match:
                 node = match
-        return self._produce_section(
+        section_row, _ = self._produce_section(
             project_id=project_id,
             edition_id=edition_id,
             node=node,
             source_ids=source_ids,
+            plan=plan,
+            chapter_units=chapter_units,
+            report_memory=ReportMemory(),
             existing_section_id=section_id,
-            plan_title=None,
             format_notes=_role_text_digest(
                 self.conn, project_id, SourceRole.FORMAT_REFERENCE.value
             )
             or None,
+            chapter=chapter_by_node.get(node.get("node_id")),
         )
+        return section_row
 
     def _produce_section(
         self,
@@ -574,14 +621,21 @@ class ProductionPipeline:
         edition_id: str,
         node: dict,
         source_ids: list[str],
-        plan_title: str | None = None,
+        plan: dict | None = None,
+        chapter_units: list | None = None,
+        report_memory: ReportMemory | None = None,
         prev_summary: str | None = None,
+        next_title: str | None = None,
         next_objective: str | None = None,
         existing_section_id: str | None = None,
         format_notes: str | None = None,
         chapter=None,
         node_order: int = 0,
-    ) -> dict:
+    ) -> tuple[dict, ReportMemory]:
+        memory = report_memory or ReportMemory()
+        units = chapter_units if chapter_units is not None else (
+            [chapter] if chapter is not None else []
+        )
         section_id = existing_section_id or f"SEC-{uuid.uuid4().hex[:10].upper()}"
         if not existing_section_id:
             self.sections.create(
@@ -610,7 +664,6 @@ class ProductionPipeline:
         pack_id = self.packs.save(section_id, pack.model_dump(mode="json"))
         self.sections.update(section_id, evidence_pack_id=pack_id, status="WRITING")
 
-        # Persist evidence items for claim links
         for item in list(pack.definitions) + list(pack.supporting_facts):
             self.claims.save_evidence_item(
                 {
@@ -637,18 +690,35 @@ class ProductionPipeline:
                 }
             )
 
-        level = int(node.get("level") or 1)
-        draft = self.writer.run(
-            chapter_id=f"CH-{node['node_id']}",
-            title=node["title"],
-            objective=node.get("objective") or "",
+        writing_ctx = self.blueprints.build_writing_context(
+            plan=plan,
+            chapter_units=units,
+            node=node,
+            chapter=chapter,
             pack=pack,
-            plan_title=plan_title,
+            report_memory=memory,
             prev_summary=prev_summary,
+            next_title=next_title,
             next_objective=next_objective,
             format_notes=format_notes,
         )
+        level = int(node.get("level") or 1)
+        draft = self.writer.run(writing_ctx)
         markdown = render_chapter_markdown(draft, heading_level=level + 1)
+
+        draft_validation = validate_draft(
+            section_id=section_id,
+            markdown=markdown,
+            pack=pack,
+            draft=draft,
+            target_words=writing_ctx.target_words,
+        )
+        if not (markdown or "").strip():
+            raise ValueError(
+                f"ChapterWriter produced empty draft for {section_id}: "
+                f"{[i.issue_type for i in draft_validation.issues]}"
+            )
+
         self.chapters.save_chapter_draft(
             edition_id=edition_id,
             section_id=section_id,
@@ -669,10 +739,14 @@ class ProductionPipeline:
             self.claims.save_claim(claim.model_dump(), eids)
 
         self.sections.save_version(section_id, 1, markdown, "initial draft")
-        return self.sections.update(
+        section_row = self.sections.update(
             section_id,
             content_markdown=markdown,
             status="DRAFT",
             revision_count=1,
             evidence_pack_id=pack_id,
         )
+        memory = self.blueprints.extend_report_memory(
+            memory, draft=draft, summary=markdown[:400]
+        )
+        return section_row, memory

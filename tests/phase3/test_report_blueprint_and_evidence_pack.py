@@ -20,6 +20,7 @@ def test_report_blueprint_groups_top_level_nodes():
                 "objective": "문제 분석",
                 "analysis_questions": ["왜 필요한가?"],
                 "planned_visuals": ["PROCESS_FLOW"],
+                "expected_length": 450,
             },
             {
                 "node_id": "N1-1",
@@ -34,6 +35,7 @@ def test_report_blueprint_groups_top_level_nodes():
     assert len(units) == 1
     assert units[0].node_id == "N1"
     assert units[0].subsection_node_ids == ["N1-1"]
+    assert units[0].expected_length == 450
 
 
 def test_evidence_pack_service_builds_without_agent(tmp_path):

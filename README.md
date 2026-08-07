@@ -17,7 +17,8 @@
 2. **수정 기반** = 이전 Edition (업로드 `PREVIOUS_EDITION`은 문체·구조 참고만)  
 3. **형식 참고** = `FORMAT_REFERENCE` 양식 (사실로 쓰지 않음)  
 4. 파싱·OCR·검색·품질 게이트·렌더링 = deterministic 코드  
-5. LLM = Ollama 기반 7 Agent; 전역 워크플로는 Service / `ReportOrchestrator`가 소유
+5. LLM = Ollama(향후 ADK execution) Agents; 전역 워크플로는 `backend/orchestration/*`가 소유  
+   (`ReportOrchestrator` Dead — 사용하지 않음). Architecture SoT: [AGENTS.md](AGENTS.md)
 
 ## 현재 상태
 
@@ -90,11 +91,15 @@ TAS_LLM_MODE=offline python -m pytest tests/ -q
 ## 디렉터리
 
 ```
-backend/     FastAPI · agents · skills · services · domain
-frontend/    React/Vite 7화면 (프로젝트·자료·분석·목차·작성·비교·출력)
+backend/
+  api/ · services/ · orchestration/ · agents/ · skills/
+  domain/ · storage/ (v1 Canonical) · model_providers/
+  adk_app/          # TEMP Migration Adapter only
+frontend/    React/Vite (기존 API Contract = Compatibility Boundary)
 prompts/     Agent instructions (외부 파일)
 config/      models · ingestion · retrieval · review · …
-docs/        DESIGN · API · UI · TESTING
+docs/        DESIGN · FLOW · API · UI · TESTING
+AGENTS.md    Architecture SoT + Migration Phases −1~9
 ```
 
 지원 업로드: PDF · DOCX · MD/TXT · PPTX · XLSX/CSV · **HWP/HWPX**

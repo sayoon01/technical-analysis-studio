@@ -2,6 +2,10 @@
 
 > Ollama agents + deterministic skills 기반 전문가 기술분석서 생성 시스템  
 > Book Studio와 무관한 **신규 프로젝트**. 코드·DB·Artifact·UI 재사용 없음.
+>
+> **Architecture Source of Truth:** 저장소 루트 [AGENTS.md](../AGENTS.md)  
+> (Final Architecture Decision §59–75, Repository/Schema Audit 확정).  
+> 본 문서와 Runtime이 충돌하면 **현재 Runtime + AGENTS.md**를 우선한다.
 
 ## 1. 해결 문제
 
@@ -72,39 +76,49 @@ Project                    # 분석 주제 최상위 단위
 
 ```
 React/Vite UI
-    │ REST
+    │ REST (Frontend Compatibility Boundary — 기존 Contract 유지)
 FastAPI Backend
-    ├── Application Services (Project, Source, Plan, Edition, Review, …)
-    └── ReportOrchestrator (stage facade)
-            └── 7 LLM Agents (Ollama)
+    ├── api/                 HTTP boundary
+    ├── services/            thin use-case facade
+    ├── orchestration/       canonical workflows (Source/Analysis/Planning/
+    │                        Production/ReviewLoop/Finalization)
+    ├── agents/              LLM/ADK reasoning roles
+    ├── skills/              deterministic processing
+    ├── model_providers/     Model Access Canonical
+    └── storage/             v1 Persistence Canonical
 Deterministic Skills (Parser, OCR, Layout, Retrieval, Chart, Export)
-Storage: SQLite + FTS5 + Vector Index + Files
+Storage: SQLite (v1 migrations) + FTS5 + Vector Index + Files
 ```
+
+`backend/adk_app`은 영구 Agent Tree가 아니라 Migration Adapter다.  
+agents가 실제 ADK 실행을 소유하면 scaffold는 제거한다.
 
 ### Agents vs Skills
 
-| Agents (Ollama) | Skills (Python) |
-|-----------------|-----------------|
-| 분석·목차·근거정제·작성·검토·수정 | 문서 파싱·OCR·레이아웃 |
+| Agents (LLM / ADK execution) | Skills (Python) |
+|------------------------------|-----------------|
+| Source Intelligence·Strategy·Outline·Writing·Review·Revision | 문서 파싱·OCR·레이아웃 |
 | structured JSON 생성 | 청크·임베딩·검색·DB |
-| | 품질 게이트·렌더링·Export |
+| | Evidence Pack·품질 게이트·Visual 렌더·Export |
 
 ---
 
-## 5. Agent (7개만)
+## 5. Agent / Workflow (Canonical)
 
 ```
-ReportOrchestrator (stage-driven facade)
-├── CorpusAnalystAgent
-├── ReportPlannerAgent
-├── EvidenceResearcherAgent
-├── TechnicalWriterAgent
-├── TechnicalReviewerAgent   ┐ 병렬
-├── EditorialReviewerAgent   ┘
+orchestration/* (canonical)
+├── CorpusAnalystAgent          (= Source Intelligence)
+├── ReportStrategistAgent
+├── OutlineArchitect            ← ReportPlanner 기반으로 OutlineDesigner MERGE
+├── OutlineCriticAgent
+├── ChapterWriterAgent
+├── TechnicalReviewerAgent      ┐
+├── EditorialReviewerAgent      ┘ 순차 (병렬 금지)
 └── ReviserAgent
 ```
 
-Visual Agent는 두지 않는다. Planner/Writer가 `VisualRequest`를 만들고 렌더링은 코드가 담당한다.
+Evidence Pack은 Agent가 아니라 deterministic Evidence/Retrieval이 담당한다.  
+Visual Planner Agent는 기본 범위가 아니다. Planner/Writer의 `VisualRequest` + VisualService 렌더링을 유지한다.
 
 ### ProjectStage
 
@@ -113,48 +127,60 @@ Visual Agent는 두지 않는다. Planner/Writer가 `VisualRequest`를 만들고
 
 목차 승인 전에는 본문 작성을 시작하지 않는다.
 
-### Orchestrator 책임
+### Orchestration 책임
 
-단계 확인, Agent 실행, 입력 조립, 스키마 검증, DB/Artifact 저장, 목차 승인 대기, 장별 실행, Reviewer 병렬, 수정 횟수, 재시도·재개, Edition 생성.  
-전체 순서를 LLM에 맡기지 않는다.
+단계 확인, Agent 실행, 입력 조립, 스키마 검증, DB/Artifact 저장, 목차 승인 대기,  
+장별 **순차** 실행, Reviewer **순차**, 수정 횟수, 재시도·재개, Edition 생성.  
+전체 순서를 LLM에 맡기지 않는다.  
+(`report_orchestrator.py` Dead — Phase 0 삭제 후보)
 
 ---
 
 ## 6. Agent별 입출력 요지
 
-### CorpusAnalyst
+### CorpusAnalyst (Source Intelligence)
 
 파싱 결과를 받아 **의미** 분석. 주제·문제·구성·흐름·성과·충돌·근거 공백.  
 이전 Edition이 있으면 유지/재작성 장도 분석.
 
-→ `CorpusAnalysis`
+→ `CorpusAnalysis` / SOURCE_PROFILE
 
-### ReportPlanner
+### ReportStrategist
+
+보고서 목적·독자·언어·범위·분량·작성 원칙.
+
+→ `ReportStrategy`
+
+### OutlineArchitect
 
 고정 템플릿 복사가 아님.  
-분석 관점(필요성·문제·구성·흐름·변화·측정·한계·결론)을 검토하되 **모든 항목을 목차로 강제하지 않음**.
+분석 관점을 검토하되 **모든 항목을 목차로 강제하지 않음**.  
+(기존 ReportPlanner 구현을 Canonical로 두고 OutlineDesigner wrapper는 통합 후 삭제)
 
-→ `ReportPlan` + `OutlineNode[]`
+→ `ReportPlan` + `OutlineNode[]` / OUTLINE_PLAN
 
-### EvidenceResearcher
+### Evidence Pack (deterministic)
 
-장 목표 → 조사 질문 → Hybrid Retrieval(원본만) → `EvidencePack`  
-Writer에게 원본 전체를 열어주지 않는다.
+장 목표 → Hybrid Retrieval(원본만) → `EvidencePack`  
+Writer에게 원본 전체를 열어주지 않는다.  
+(구 EvidenceResearcher Agent stub는 Runtime이 아님)
 
-### TechnicalWriter
+### ChapterWriter
 
 Plan + Outline + Evidence Pack + 문체/인용 정책 + 앞·뒤 장 맥락 + (선택) 이전 장.  
 사실·수치는 Evidence 근거 필수. 분석·해석·시사점·한계 명시는 허용하되 사실과 구분.  
 Evidence에 없는 핵심 사실·수치·구현 세부 단정 금지. 수치에 출처 페이지. 미확인은 명시.
 
-### Reviewers (병렬)
+### Reviewers (순차)
 
-- Technical: 근거·인용·수치·과장·이전 Edition 단독 근거
-- Editorial: 구조·중복·문체·홍보문구·용어·시각자료 설명
+1. Technical: 근거·인용·수치·과장·이전 Edition 단독 근거  
+2. Editorial: 구조·중복·문체·홍보문구·용어·시각자료 설명  
+
+병렬(ThreadPool) 실행은 최종 Architecture에서 제거한다.
 
 ### Reviser
 
-지적 부분만 수정. 장 전체 재생성 금지. 최대 3회.
+Structured Review Issue가 지적한 부분만 수정. 장 전체 재생성 금지. 횟수 제한(Config).
 
 ---
 
@@ -221,15 +247,25 @@ FTS5 top-k ∪ Vector top-k → 병합·중복제거 → **EVIDENCE_SOURCE만** 
 
 ## 11. 데이터 · API · UI
 
-### DB (MVP: SQLite)
+### DB (MVP: SQLite) — v1 Canonical
+
+Runtime Persistence SoT = `backend/storage/migrations/*` (v1).
 
 `projects`, `sources`, `source_pages`, `content_blocks`, `visual_assets`, `metric_facts`,  
 `corpus_snapshots`, `corpus_snapshot_sources`,  
 `report_plans`, `outlines`, `outline_nodes`,  
 `report_editions`, `sections`, `section_versions`,  
 `evidence_items`, `claims`, `claim_evidence_links`,  
-`reviews`, `review_issues`,  
+`reviews` (`section_id`), `review_issues`,  
 `production_runs`, `production_tasks`, `artifacts`, `exports`
+
+- Domain **Chapter** ↔ Persistence **`sections` / `section_versions`**  
+- `migrations_v2` (`chapters` 등)는 최종 Runtime이 아니며 Retirement 대상  
+- 새 Artifact 평행 schema 금지; 기존 `artifacts` 활용
+- **paragraph edit lock** = EXISTING PRODUCT CONTRACT  
+  (`PATCH /api/paragraphs/{id}`, `edit_state`: USER_LOCKED / AI_EDITABLE 등).  
+  Frontend Production UI가 사용 중이며 Migration 중 보존한다.  
+  이것이 `migrations_v2` 전체 KEEP를 의미하지 않으며, Persistence 정리는 Phase 5에서 판단한다.
 
 ### API 그룹
 
@@ -257,7 +293,7 @@ Projects / Sources / Analyze / Plans·Outlines / Editions / Sections / Exports
 | 1 | Project·Ingestion·Chunk·FTS5·Vector | 첨부 PDF 페이지별 텍스트/다이어그램/수치 조회 |
 | 2 | Analyst·Planner·목차 UI·승인 | 다른 자료 → 다른 제목·목차 (코드 변경 없음) |
 | 3 | Hybrid·Evidence·Writer·Claim 링크 | 문장 클릭 → 원본 페이지 |
-| 4 | 병렬 Review·Gate·Reviser | 무근거·수치 오류 탐지·수정 |
+| 4 | 순차 Review·Gate·Reviser | 무근거·수치 오류 탐지·수정 |
 | 5 | Visual·MD/DOCX/PDF | 흐름도·구성도·성과 차트 |
 | 6 | Snapshot·Impact·Diff | 영향 장만 갱신 |
 

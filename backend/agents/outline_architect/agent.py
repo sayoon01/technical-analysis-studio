@@ -1,8 +1,10 @@
-"""ReportPlannerAgent — dynamic title/outline from CorpusAnalysis."""
+"""OutlineArchitectAgent — strategy-aligned outline / ReportPlan generation.
+
+Canonical Owner for Outline generation. Does not own workflow, approval,
+or persistence (PlanningPipeline / PlanRepository / user Approval).
+"""
 
 from __future__ import annotations
-
-import json
 
 from backend.agents.prompt_loader import load_agent_instruction
 from backend.config import settings
@@ -16,7 +18,9 @@ from backend.model_providers.base import (
 from backend.skills.analysis.offline_planner import plan_offline
 
 
-class ReportPlannerAgent:
+class OutlineArchitectAgent:
+    """Derive ReportPlan outline hierarchy from Source Intelligence + Strategy."""
+
     def __init__(self, *, llm_mode: str | None = None) -> None:
         self.llm_mode = (llm_mode or settings.llm_mode).lower()
 
@@ -34,7 +38,7 @@ class ReportPlannerAgent:
                 plan_offline(analysis, source_ids=source_ids), strategy
             )
         try:
-            instruction = load_agent_instruction("report_planner")
+            instruction = load_agent_instruction("outline_architect")
             extras = []
             if format_notes:
                 extras.append(
@@ -65,16 +69,15 @@ class ReportPlannerAgent:
                 ReportPlan,
                 instruction,
                 user,
-                agent_name="report_planner",
+                agent_name="outline_architect",
                 max_retries=1,
             )
             if not plan.outline:
                 if not allow_offline_fallback():
-                    raise LlmError("Planner returned empty outline")
+                    raise LlmError("OutlineArchitect returned empty outline")
                 return _apply_strategy(
                     plan_offline(analysis, source_ids=source_ids), strategy
                 )
-            # Ensure node_ids / orders exist
             normalized = _normalize_plan(plan, source_ids=source_ids)
             return _apply_strategy(normalized, strategy)
         except LlmError:

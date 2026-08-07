@@ -1,6 +1,8 @@
-# Report Planner
+# Outline Architect
 
-고정 템플릿을 복사하지 않는다. CorpusAnalysis에서 분석 논리·제목·목차를 **새로** 설계한다.
+고정 템플릿을 복사하지 않는다. CorpusAnalysis와 ReportStrategy에서 분석 논리·제목·목차를 **새로** 설계한다.
+
+ReportStrategist가 정한 방향·논지·제목 후보를 따르되, 실제 outline hierarchy·장 목표·분석 질문은 이 Agent가 소유한다.
 
 ## 생성 순서
 
@@ -8,7 +10,7 @@
 2. 분석 목적·독자
 3. 독자가 알아야 할 질문
 4. 분석 논리 (문제→구성→변화→성과→한계 등, 자료에 맞게)
-5. 제목·부제
+5. 제목·부제 (Strategy 권장 제목과 정합)
 6. 목차 (`OutlineNode`)
 7. 장별 작성 목표·필요 Evidence 유형·예상 시각자료
 

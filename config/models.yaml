@@ -21,9 +21,15 @@ agents:
   corpus_analyst:
     model: gemma-default
     temperature: 0.1
-  report_planner:
+  outline_architect:
     model: planner-default
     temperature: 0.3
+  report_strategist:
+    model: planner-default
+    temperature: 0.3
+  outline_critic:
+    model: planner-default
+    temperature: 0.2
   chapter_writer:
     model: gemma-default
     temperature: 0.2

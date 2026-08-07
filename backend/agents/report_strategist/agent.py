@@ -33,7 +33,7 @@ class ReportStrategistAgent:
                 ReportStrategy,
                 instruction,
                 user,
-                agent_name="report_planner",
+                agent_name="report_strategist",
                 max_retries=1,
             )
             if not strategy.title_candidates:

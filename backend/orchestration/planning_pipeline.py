@@ -1,16 +1,16 @@
-"""Planning pipeline: analysis → ReportPlanner → outline wait."""
+"""Planning pipeline: Strategist → OutlineArchitect → Critic → Gate → wait approval."""
 
 from __future__ import annotations
 
 import sqlite3
 
+from backend.agents.outline_architect.agent import OutlineArchitectAgent
 from backend.agents.outline_critic.agent import OutlineCriticAgent
-from backend.agents.outline_designer.agent import OutlineDesignerAgent
 from backend.agents.report_strategist.agent import ReportStrategistAgent
+from backend.domain.enums import SourceRole
 from backend.domain.report_plan import CorpusAnalysis
 from backend.skills.analysis.corpus_context import _role_text_digest
 from backend.skills.analysis.outline_quality_gate import validate_outline
-from backend.domain.enums import SourceRole
 from backend.storage.plan_repository import AnalysisRepository, PlanRepository
 from backend.storage.repositories import ProjectRepository, SourceRepository
 
@@ -24,7 +24,7 @@ class PlanningPipeline:
     ) -> None:
         self.conn = conn
         self.strategist = ReportStrategistAgent(llm_mode=llm_mode)
-        self.designer = OutlineDesignerAgent(llm_mode=llm_mode)
+        self.outline_architect = OutlineArchitectAgent(llm_mode=llm_mode)
         self.critic = OutlineCriticAgent(llm_mode=llm_mode)
         self.analyses = AnalysisRepository(conn)
         self.plans = PlanRepository(conn)
@@ -57,7 +57,7 @@ class PlanningPipeline:
         plan = None
         review = None
         for _attempt in range(2):
-            plan = self.designer.run(
+            plan = self.outline_architect.run(
                 analysis,
                 strategy=strategy,
                 source_ids=source_ids,

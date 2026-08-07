@@ -1280,7 +1280,7 @@ Architecture 개편 중
 | Workflow Orchestration | `backend/orchestration/*` | KEEP; `report_orchestrator.py` → REMOVE (Phase 0) |
 | Source Intelligence | `agents/corpus_analyst` | KEEP; ADK dual path MERGE (Phase 1/6) |
 | Report Strategy | `agents/report_strategist` | KEEP |
-| Outline Architect | `agents/report_planner` (통합 후 OutlineArchitect) | `outline_designer` wrapper → MERGE/REMOVE (Phase 2) |
+| Outline Architect | `agents/outline_architect` | KEEP (Phase 2: ReportPlanner MOVE + OutlineDesigner REMOVE) |
 | Outline Review | `agents/outline_critic` + deterministic Planning Gate | KEEP (역할 분리) |
 | Chapter Writing | `agents/chapter_writer` | KEEP; contract 통일 (Phase 3) |
 | Technical Review | `agents/technical_reviewer` | KEEP; 순차 실행 (Phase 4) |
@@ -1324,7 +1324,8 @@ ChapterDraft
 
 Legacy:
 agents/technical_writer/ → REMOVE
-outline_designer wrapper → MERGE
+outline_designer wrapper → REMOVE (Phase 2 완료)
+report_planner → MOVE/RENAME to outline_architect (Phase 2 완료)
 
 # 40. Directory Has Meaning
 
@@ -1819,13 +1820,11 @@ Source Intelligence
 → deterministic Planning Gate
 → User Approval
 
-현재 `OutlineDesigner`와 `ReportPlanner`는
-실질적으로 같은 책임이므로 둘 다 유지하지 않는다.
+현재 Outline 생성은 `OutlineArchitectAgent` 단일 Canonical Owner다.
+(구 `OutlineDesigner` wrapper + `ReportPlanner` 구현은 Phase 2에서 MERGE/REMOVE 완료.)
 
-실제 기능이 더 완성된 쪽을 기반으로
-하나의 OutlineArchitect로 통합한다.
-
-통합 완료 후 Wrapper/중복 구현은 삭제한다.
+Outline Reviewer 역할의 구현명은 `OutlineCriticAgent`로 유지한다
+(LLM semantic review). Deterministic Planning Gate(`validate_outline`)와 역할이 분리된다.
 
 # 62. Persistence Canonical Decision (v1)
 
@@ -2217,16 +2216,17 @@ OutlineDesigner wraps ReportPlanner.
 
 CHANGE:
 Source Intelligence → Strategist → Outline Architect → Outline Reviewer → Gate → Approval.
-단일 OutlineArchitect로 MERGE.
+단일 OutlineArchitect로 MERGE. (`agents/report_planner` → `agents/outline_architect` MOVE/RENAME; designer REMOVE)
 
 AFTER:
-Planning 단일 체인.
+Planning 단일 체인. Outline Business Logic Owner = 1 (`OutlineArchitectAgent`).
+Outline Reviewer semantic role = `OutlineCriticAgent` (rename 없이 KEEP).
 
 Frontend Contract:
 plans/outline/approve API 불변.
 
 DELETE:
-thin designer wrapper / 중복 prompt 연결.
+`outline_designer/` wrapper, `report_planner/` (MOVE 후), `prompts/.../report_planner.md` (→ `outline_architect.md`)
 
 TEST:
 planning/outline gate + Frontend Regression Gate.
@@ -2237,6 +2237,7 @@ designer+planner 이전 호출 restore.
 완료 조건:
 Outline 책임 Owner 1개.
 Wrapper reference 0.
+(Phase 2 완료)
 
 ---
 
@@ -2477,7 +2478,8 @@ Frontend Regression Gate PASS.
 - orphan `__pycache__`
 
 ### 통합 후 삭제
-- `outline_designer` wrapper (Phase 2 MERGE 후)
+- `outline_designer` wrapper — Phase 2 REMOVE 완료
+- `report_planner` — Phase 2 MOVE → `outline_architect` 완료
 - ADK corpus dual fork / duplicate prompt_loader (Phase 1/6)
 - Reviewer 병렬 실행 경로 (Phase 4)
 - 역할별 direct LLM path (Phase 6, 검증 후)

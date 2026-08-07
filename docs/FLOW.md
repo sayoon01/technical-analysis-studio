@@ -14,10 +14,9 @@
     ↓
 [ReportStrategist] 목적·독자·범위·분량·작성 원칙
     ↓
-[OutlineArchitect] 제목·동적 목차·장 목표
-    (OutlineDesigner/ReportPlanner 중복은 단일 Owner로 통합)
+[OutlineArchitect] 제목·동적 목차·장 목표 (Canonical Owner 1)
     ↓
-[OutlineReviewer] + deterministic Planning Gate
+[OutlineCritic = Outline Reviewer] + deterministic Planning Gate
     ↓
 [사용자] 목차 승인  ← WAITING_FOR_OUTLINE_APPROVAL
     ↓

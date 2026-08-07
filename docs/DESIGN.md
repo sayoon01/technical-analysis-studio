@@ -109,7 +109,7 @@ agents가 실제 ADK 실행을 소유하면 scaffold는 제거한다.
 orchestration/* (canonical)
 ├── CorpusAnalystAgent          (= Source Intelligence)
 ├── ReportStrategistAgent
-├── OutlineArchitect            ← ReportPlanner 기반으로 OutlineDesigner MERGE
+├── OutlineArchitectAgent       ← Canonical Outline Owner (Designer/Planner MERGE 완료)
 ├── OutlineCriticAgent
 ├── ChapterWriterAgent
 ├── TechnicalReviewerAgent      ┐
@@ -155,7 +155,7 @@ Visual Planner Agent는 기본 범위가 아니다. Planner/Writer의 `VisualReq
 
 고정 템플릿 복사가 아님.  
 분석 관점을 검토하되 **모든 항목을 목차로 강제하지 않음**.  
-(기존 ReportPlanner 구현을 Canonical로 두고 OutlineDesigner wrapper는 통합 후 삭제)
+Canonical Owner: `backend/agents/outline_architect` (구 ReportPlanner 로직 MERGE; OutlineDesigner wrapper 삭제 완료).
 
 → `ReportPlan` + `OutlineNode[]` / OUTLINE_PLAN
 

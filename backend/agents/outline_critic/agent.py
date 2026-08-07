@@ -31,7 +31,7 @@ class OutlineCriticAgent:
                 OutlineReview,
                 instruction,
                 user,
-                agent_name="report_planner",
+                agent_name="outline_critic",
                 max_retries=1,
             )
         except LlmError:

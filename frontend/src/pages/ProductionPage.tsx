@@ -17,10 +17,12 @@ export default function ProductionPage() {
   const [busy, setBusy] = useState(false);
   const [jobPhase, setJobPhase] = useState<JobPhase>(null);
   const [jobLabel, setJobLabel] = useState("");
+  const [progressText, setProgressText] = useState("");
   const [interrupted, setInterrupted] = useState(false);
   const localRun = useRef(false);
   const resumeRun = useRef(false);
   const sectionIdRef = useRef("");
+  const reviewStarted = useRef(false);
 
   const working = busy || jobPhase === "producing" || jobPhase === "reviewing";
 
@@ -102,8 +104,26 @@ export default function ProductionPage() {
         setInterrupted(!!st.interrupted && !running);
         if (running) {
           sawBusy = true;
+          setBusy(true);
           setJobPhase(phase);
           setJobLabel(st.label || "");
+          if (
+            typeof st.completed_sections === "number" &&
+            typeof st.total_sections === "number" &&
+            st.total_sections > 0
+          ) {
+            const title = st.current_section_title
+              ? ` · ${st.current_section_title}`
+              : "";
+            const step = st.label || st.current_step || "";
+            setProgressText(
+              `${st.completed_sections} / ${st.total_sections}${title}${
+                step ? ` — ${step}` : ""
+              }`,
+            );
+          } else {
+            setProgressText("");
+          }
           if (st.current_edition_id && st.current_edition_id !== editionId) {
             setEditionId(st.current_edition_id);
           } else if (st.current_edition_id) {
@@ -112,16 +132,31 @@ export default function ProductionPage() {
         } else if (!localRun.current) {
           setJobPhase(null);
           setJobLabel("");
-          if (sawBusy) {
+          setProgressText("");
+          if (sawBusy || reviewStarted.current) {
+            const wasReview = sawBusy || reviewStarted.current;
             sawBusy = false;
+            reviewStarted.current = false;
+            setBusy(false);
             const eid = st.current_edition_id || editionId;
             if (eid) await loadEdition(eid).catch(() => null);
-            setMsg(
-              phase === "reviewing" || st.stage === "READY_FOR_EXPORT"
-                ? "작성·검토 완료"
-                : "작성 작업 완료",
-            );
-            setBusy(false);
+            if (st.error) {
+              setErr(String(st.error));
+              setMsg("");
+            } else if (wasReview) {
+              const rr = st.review_result as
+                | { all_passed?: boolean }
+                | undefined;
+              setMsg(
+                rr && "all_passed" in rr
+                  ? `검토 완료 · all_passed=${String(rr.all_passed)}`
+                  : phase === "reviewing" ||
+                      st.stage === "READY_FOR_EXPORT" ||
+                      st.stage === "REVIEWING"
+                    ? "검토 완료"
+                    : "작성 작업 완료",
+              );
+            }
           }
         }
       } catch {
@@ -222,24 +257,19 @@ export default function ProductionPage() {
   async function review() {
     if (!editionId || working) return;
     localRun.current = true;
+    reviewStarted.current = true;
     setBusy(true);
     setJobPhase("reviewing");
     setJobLabel("검토 중 (Ollama) — 수 분 걸릴 수 있습니다");
+    setProgressText("");
     setErr("");
     setMsg("");
     try {
-      const res = await api.reviewEdition(editionId);
-      setMsg(
-        `검토 완료 · all_passed=${String((res as { all_passed?: boolean }).all_passed)}`,
-      );
-      await loadEdition(editionId);
-      if (sectionId) {
-        setIssues(await api.sectionIssues(sectionId));
-        setSection(await api.getSection(sectionId));
-      }
-      setJobPhase(null);
-      setJobLabel("");
+      await api.startEditionReview(editionId);
+      setMsg("검토가 백그라운드에서 시작되었습니다. 진행 상태는 자동으로 갱신됩니다.");
+      // Hand off to status polling — do not await full edition completion.
     } catch (e) {
+      reviewStarted.current = false;
       const text = String((e as Error).message || e);
       if (/already running/i.test(text)) {
         setMsg("이미 작업 중입니다. 완료되면 자동으로 갱신됩니다.");
@@ -247,10 +277,10 @@ export default function ProductionPage() {
         setErr(text);
         setJobPhase(null);
         setJobLabel("");
+        setBusy(false);
       }
     } finally {
       localRun.current = false;
-      setBusy(false);
     }
   }
 
@@ -344,7 +374,8 @@ export default function ProductionPage() {
           <div>
             <strong>{bannerTitle}</strong>
             <div className="muted" style={{ marginTop: "0.15rem" }}>
-              {jobLabel ||
+              {progressText ||
+                jobLabel ||
                 "Ollama로 장별 근거 수집·작성·검토 중입니다. 다른 메뉴로 이동해도 계속 실행됩니다."}
             </div>
           </div>

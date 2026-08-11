@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
+from collections.abc import Callable
+from typing import Any
 
 from backend.agents.editorial_reviewer.agent import EditorialReviewerAgent
 from backend.agents.reviser.agent import ReviserAgent
@@ -33,6 +35,8 @@ from backend.storage.review_repository import ReviewRepository
 
 logger = logging.getLogger(__name__)
 
+ProgressCallback = Callable[[dict[str, Any]], None]
+
 
 class ReviewLoop:
     def __init__(
@@ -41,10 +45,12 @@ class ReviewLoop:
         *,
         llm_mode: str | None = None,
         max_revisions: int | None = None,
+        on_progress: ProgressCallback | None = None,
     ) -> None:
         self.conn = conn
         self.llm_mode = llm_mode
         self.max_revisions = max_revisions or settings.max_revisions
+        self.on_progress = on_progress
         self.projects = ProjectRepository(conn)
         self.editions = EditionRepository(conn)
         self.sections = SectionRepository(conn)
@@ -56,6 +62,14 @@ class ReviewLoop:
         self.editorial = EditorialReviewerAgent(llm_mode=llm_mode)
         self.reviser = ReviserAgent(llm_mode=llm_mode)
 
+    def _emit_progress(self, **fields: Any) -> None:
+        if not self.on_progress:
+            return
+        try:
+            self.on_progress(dict(fields))
+        except Exception:
+            logger.exception("review progress callback failed")
+
     def run_edition(self, edition_id: str) -> dict:
         edition = self.editions.get(edition_id)
         if not edition:
@@ -63,10 +77,26 @@ class ReviewLoop:
         project_id = edition["project_id"]
         self.projects.update_stage(project_id, ProjectStage.REVIEWING.value)
 
+        sections = list(self.sections.list_for_edition(edition_id))
+        pending = [
+            s
+            for s in sections
+            if (s.get("status") or "").upper() != "PASSED"
+        ]
+        total = len(pending)
+        completed = 0
+        self._emit_progress(
+            current_step="starting",
+            completed_sections=0,
+            total_sections=total,
+            current_section=None,
+            current_section_title=None,
+        )
+
         results = []
         all_pass = True
         manual = False
-        for section in self.sections.list_for_edition(edition_id):
+        for section in sections:
             status = (section.get("status") or "").upper()
             if status == "PASSED":
                 results.append(
@@ -79,8 +109,23 @@ class ReviewLoop:
                     }
                 )
                 continue
+            self._emit_progress(
+                current_section=section["section_id"],
+                current_section_title=section.get("title") or "",
+                current_step="validating",
+                completed_sections=completed,
+                total_sections=total,
+            )
             outcome = self.run_section(section["section_id"])
             results.append(outcome)
+            completed += 1
+            self._emit_progress(
+                current_section=section["section_id"],
+                current_section_title=section.get("title") or "",
+                current_step="completed",
+                completed_sections=completed,
+                total_sections=total,
+            )
             if outcome["status"] != "PASSED":
                 all_pass = False
             if outcome["status"] == "MANUAL_REVIEW":
@@ -88,6 +133,11 @@ class ReviewLoop:
 
         full_report = None
         if all_pass:
+            self._emit_progress(
+                current_step="full_report",
+                completed_sections=completed,
+                total_sections=total,
+            )
             full_report = self.run_full_report(edition_id)
             if full_report["status"] != "PASSED":
                 all_pass = False
@@ -105,6 +155,11 @@ class ReviewLoop:
             self.editions.update_status(edition_id, "IN_REVIEW")
             stage = ProjectStage.REVIEWING.value
 
+        self._emit_progress(
+            current_step="completed",
+            completed_sections=completed,
+            total_sections=total,
+        )
         return {
             "edition_id": edition_id,
             "stage": stage,
@@ -156,10 +211,6 @@ class ReviewLoop:
         chapter_row = self.chapters.get_by_key(section["edition_id"], chapter_key)
         chapter_id = chapter_row["chapter_id"] if chapter_row else f"CH-{chapter_key}"
 
-        # Fresh review attempt: do not let stale OPEN issues from a prior failed
-        # or superseded round pollute Frontend / QualityGate inputs.
-        self.reviews.supersede_open_issues(section_id)
-
         # First round: always both reviewers (sequential).
         run_technical = True
         run_editorial = True
@@ -167,6 +218,10 @@ class ReviewLoop:
         editorial = None
 
         while True:
+            # Each review/revision round: current OPEN issues must reflect this
+            # round only. Historical review rows remain; OPEN status is superseded.
+            self.reviews.supersede_open_issues(section_id)
+
             self.projects.update_stage(
                 self.editions.get(section["edition_id"])["project_id"],
                 ProjectStage.REVIEWING.value,
@@ -176,6 +231,7 @@ class ReviewLoop:
             draft = self.chapters.load_draft(chapter_id)
 
             # 1) Deterministic DraftValidator (always after write/revise)
+            self._emit_progress(current_step="validating")
             draft_validation = validate_draft(
                 section_id=section_id,
                 markdown=markdown,
@@ -191,6 +247,7 @@ class ReviewLoop:
                     section_id,
                     revision,
                 )
+                self._emit_progress(current_step="technical_review")
                 technical = self.technical.run(
                     section_id=section_id,
                     markdown=markdown,
@@ -208,6 +265,7 @@ class ReviewLoop:
                     section_id,
                     revision,
                 )
+                self._emit_progress(current_step="editorial_review")
                 editorial = self.editorial.run(
                     section_id=section_id,
                     markdown=markdown,
@@ -216,12 +274,14 @@ class ReviewLoop:
             assert editorial is not None
 
             # 3) Deterministic aggregation + quality gate
+            self._emit_progress(current_step="aggregating")
             aggregated = aggregate_issues(
                 technical=technical,
                 editorial=editorial,
                 draft_validation=draft_validation,
             )
 
+            self._emit_progress(current_step="quality_gate")
             gate = decide_gate(
                 technical=technical,
                 editorial=editorial,
@@ -282,6 +342,7 @@ class ReviewLoop:
                 ProjectStage.REVISING.value,
             )
             self.sections.update(section_id, status="REVISING")
+            self._emit_progress(current_step="revising")
             revision += 1
             locked_texts = self.chapters.list_locked_paragraph_texts(chapter_id)
             result = self.reviser.run(

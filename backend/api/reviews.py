@@ -13,6 +13,7 @@ router = APIRouter(tags=["reviews"])
 
 @router.post("/api/editions/{edition_id}/review")
 def review_edition(edition_id: str):
+    """Synchronous edition review — existing PUBLIC contract (blocks until done)."""
     try:
         return get_review_service().review_edition(edition_id)
     except KeyError:
@@ -21,6 +22,17 @@ def review_edition(edition_id: str):
         raise HTTPException(400, str(e)) from e
     except LlmError as e:
         raise http_from_llm_error(e, role="Technical/editorial review") from e
+
+
+@router.post("/api/editions/{edition_id}/review/start")
+def start_edition_review(edition_id: str):
+    """Background edition review start — additive; returns immediately."""
+    try:
+        return get_review_service().start_edition_review(edition_id)
+    except KeyError:
+        raise HTTPException(404, "Edition not found") from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
 
 @router.post("/api/editions/{edition_id}/review/full")

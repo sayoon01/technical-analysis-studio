@@ -36,6 +36,16 @@ export const api = {
       started_at?: string | null;
       current_edition_id?: string;
       interrupted?: boolean;
+      current_section?: string | null;
+      current_section_title?: string | null;
+      current_step?: string | null;
+      completed_sections?: number;
+      total_sections?: number;
+      error?: string | null;
+      failed_step?: string | null;
+      failed_section?: string | null;
+      review_result?: Record<string, unknown> | null;
+      finished_at?: string | null;
     }>(`/api/projects/${id}/status`),
   listSources: (projectId: string) =>
     request<import("../types").Source[]>(`/api/projects/${projectId}/sources`),
@@ -111,6 +121,16 @@ export const api = {
     }),
   reviewEdition: (editionId: string) =>
     request<Record<string, unknown>>(`/api/editions/${editionId}/review`, {
+      method: "POST",
+    }),
+  startEditionReview: (editionId: string) =>
+    request<{
+      accepted: boolean;
+      phase: string;
+      edition_id: string;
+      project_id?: string;
+      total_sections?: number;
+    }>(`/api/editions/${editionId}/review/start`, {
       method: "POST",
     }),
   sectionIssues: (sectionId: string) =>

@@ -331,6 +331,7 @@ def test_public_route_surface_freeze(client):
         "/api/editions/{edition_id}/sections": {"get"},
         "/api/sections/{section_id}": {"get"},
         "/api/editions/{edition_id}/review": {"post"},
+        "/api/editions/{edition_id}/review/start": {"post"},
         "/api/sections/{section_id}/issues": {"get"},
         "/api/paragraphs/{paragraph_id}": {"patch"},
         "/api/editions/{edition_id}/exports": {"get", "post"},

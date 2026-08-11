@@ -65,7 +65,10 @@ class PlanService:
                 ).fetchone()
                 if row and row["status"] == "PRODUCING":
                     interrupted = True
-        return {
+        from backend.services.job_status import get_job_outcome
+
+        outcome = get_job_outcome(project_id) if not busy else None
+        status: dict = {
             "project_id": project_id,
             "stage": project["stage"],
             "busy": busy,
@@ -76,6 +79,29 @@ class PlanService:
             "current_edition_id": project.get("current_edition_id"),
             "interrupted": interrupted,
         }
+        # Additive progress / failure projection (unknown fields ignored by older FE).
+        if job:
+            for key in (
+                "current_section",
+                "current_section_title",
+                "current_step",
+                "completed_sections",
+                "total_sections",
+            ):
+                if key in job:
+                    status[key] = job[key]
+        if outcome:
+            if outcome.get("error"):
+                status["error"] = outcome["error"]
+            if outcome.get("failed_step"):
+                status["failed_step"] = outcome["failed_step"]
+            if outcome.get("failed_section"):
+                status["failed_section"] = outcome["failed_section"]
+            if outcome.get("result") is not None:
+                status["review_result"] = outcome["result"]
+            if outcome.get("finished_at"):
+                status["finished_at"] = outcome["finished_at"]
+        return status
 
     def analyze(self, project_id: str) -> dict:
         if not self.projects.get(project_id):

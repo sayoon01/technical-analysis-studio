@@ -9,7 +9,10 @@ from backend.config import settings
 
 
 def db_path_from_url(url: str | None = None) -> Path:
-    raw = url or settings.database_url
+    # Import at call time so tests/monkeypatch of backend.config.settings apply.
+    from backend.config import settings as cfg
+
+    raw = url or cfg.database_url
     if raw.startswith("sqlite:///"):
         return Path(raw.removeprefix("sqlite:///"))
     return Path(raw)

@@ -53,6 +53,11 @@ class TechnicalReviewerAgent:
                 user,
                 agent_name="technical_reviewer",
             )
+            for issue in refined.issues:
+                if not issue.section_id or issue.section_id == "UNKNOWN":
+                    issue.section_id = section_id
+                if not issue.reviewer_type:
+                    issue.reviewer_type = "technical"
             # Never loosen blockers below deterministic counts
             refined.unsupported_claim_count = max(
                 refined.unsupported_claim_count, base.unsupported_claim_count

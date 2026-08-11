@@ -54,6 +54,70 @@ def test_normalize_editorial_ratio_string():
     EditorialReview.model_validate(fixed)
 
 
+def test_normalize_editorial_issues_from_strings_and_partial_objects():
+    raw = {
+        "decision": "REVISE",
+        "section_id": "SEC-9F07F8487B",
+        "issues": [
+            "The document repeats the goal statement twice.",
+            {
+                "issue_type": "REPETITION",
+                "description": "Near-duplicate paragraphs.",
+                "status": "OPEN",
+            },
+            {
+                "issue_id": "ISSUE-002",
+                "severity": "high",
+                "problem": "Weak analysis section",
+                "required_change": "Add concrete technical interpretation.",
+            },
+            {
+                "issue_id": "      // No id",
+                "description": "Garbage id from truncated model output",
+                "recommendation": "Rewrite cleanly.",
+                "severity": "INFO",
+            },
+        ],
+        "duplicate_paragraph_ratio": 0.2,
+        "promotional_phrase_count": 0,
+        "terminology_inconsistency_count": 0,
+        "critical_issue_count": 1,
+    }
+    fixed = _normalize_structured_raw("EditorialReview", raw)
+    obj = EditorialReview.model_validate(fixed)
+    assert len(obj.issues) == 4
+    assert obj.issues[0].description.startswith("The document repeats")
+    assert obj.issues[0].reviewer_type == "editorial"
+    assert obj.issues[0].section_id == "SEC-9F07F8487B"
+    assert obj.issues[0].issue_id.startswith("ISS-")
+    assert obj.issues[0].severity.value == "MAJOR"
+    assert obj.issues[1].issue_type == "REPETITION"
+    assert "Address" in obj.issues[1].recommendation
+    assert obj.issues[2].severity.value == "MAJOR"  # high → MAJOR
+    assert "concrete technical" in obj.issues[2].recommendation
+    assert obj.issues[3].issue_id.startswith("ISS-")
+    assert "//" not in obj.issues[3].issue_id
+    assert obj.issues[3].severity.value == "MINOR"  # INFO → MINOR
+
+
+def test_normalize_technical_issues_string_list():
+    raw = {
+        "decision": "REVISE",
+        "issues": ["Unsupported numeric claim without evidence."],
+        "evidence_coverage": 0.5,
+        "unsupported_claim_count": 1,
+        "citation_mismatch_count": 0,
+        "numeric_mismatch_count": 0,
+        "critical_issue_count": 0,
+    }
+    fixed = _normalize_structured_raw("TechnicalReview", raw)
+    obj = TechnicalReview.model_validate(fixed)
+    assert len(obj.issues) == 1
+    assert obj.issues[0].reviewer_type == "technical"
+    assert obj.issues[0].section_id == "UNKNOWN"
+
+
+
 def test_http_from_llm_error_is_502_safe():
     exc = LlmError(
         "Structured generation failed after retries: "

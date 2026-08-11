@@ -49,6 +49,11 @@ class EditorialReviewerAgent:
                 user,
                 agent_name="editorial_reviewer",
             )
+            for issue in refined.issues:
+                if not issue.section_id or issue.section_id == "UNKNOWN":
+                    issue.section_id = section_id
+                if not issue.reviewer_type:
+                    issue.reviewer_type = "editorial"
             refined.critical_issue_count = max(
                 refined.critical_issue_count, base.critical_issue_count
             )

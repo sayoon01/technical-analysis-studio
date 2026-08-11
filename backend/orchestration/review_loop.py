@@ -197,6 +197,9 @@ class ReviewLoop:
                     pack=pack,
                     claims=claims,
                 )
+                # Persist immediately so a later editorial failure still leaves
+                # a durable technical artifact for diagnosis / partial retry.
+                self.reviews.save_technical(section_id, technical)
             assert technical is not None
 
             if run_editorial:
@@ -209,6 +212,7 @@ class ReviewLoop:
                     section_id=section_id,
                     markdown=markdown,
                 )
+                self.reviews.save_editorial(section_id, editorial)
             assert editorial is not None
 
             # 3) Deterministic aggregation + quality gate
@@ -217,8 +221,6 @@ class ReviewLoop:
                 editorial=editorial,
                 draft_validation=draft_validation,
             )
-            self.reviews.save_technical(section_id, technical)
-            self.reviews.save_editorial(section_id, editorial)
 
             gate = decide_gate(
                 technical=technical,

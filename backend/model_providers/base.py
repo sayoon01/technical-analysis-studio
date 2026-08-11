@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -157,9 +158,11 @@ def generate_structured(
         schema_hint = (
             "Respond with a single JSON object using these keys only:\n"
             f"{json.dumps(fields, ensure_ascii=False)}\n"
-            "Rules: decision is PASS|REVISE|MANUAL_REVIEW; issues is a JSON array of "
-            "objects {issue_id,section_id,reviewer_type,severity,issue_type,"
+            "Rules: decision is PASS|REVISE|MANUAL_REVIEW; "
+            "issues MUST be a JSON array of objects (never plain strings), each with "
+            "{issue_id,section_id,reviewer_type,severity,issue_type,"
             "description,recommendation,status}; "
+            "severity is CRITICAL|MAJOR|MINOR; "
             "evidence_coverage is a float between 0 and 1 (not a percent string); "
             "unsupported_claim_count, citation_mismatch_count, numeric_mismatch_count, "
             "critical_issue_count are integers. Do not include provenance."
@@ -168,7 +171,11 @@ def generate_structured(
         schema_hint = (
             "Respond with a single JSON object using these keys only:\n"
             f"{json.dumps(fields, ensure_ascii=False)}\n"
-            "Rules: decision is PASS|REVISE|MANUAL_REVIEW; issues is a JSON array; "
+            "Rules: decision is PASS|REVISE|MANUAL_REVIEW; "
+            "issues MUST be a JSON array of objects (never plain strings), each with "
+            "{issue_id,section_id,reviewer_type,severity,issue_type,"
+            "description,recommendation,status}; "
+            "severity is CRITICAL|MAJOR|MINOR; "
             "duplicate_paragraph_ratio is a float 0-1; counts are integers. "
             "Do not include provenance."
         )
@@ -232,6 +239,18 @@ def _normalize_structured_raw(name: str, raw: dict[str, Any]) -> dict[str, Any]:
     # provenance is set by the agent after a successful call
     data.pop("provenance", None)
 
+    reviewer_type = (
+        "technical"
+        if name == "TechnicalReview"
+        else "editorial"
+        if name == "EditorialReview"
+        else "unknown"
+    )
+    section_hint = _first_str(
+        data.get("section_id"),
+        data.get("chapter_id"),
+    )
+
     if name == "TechnicalReview":
         ec = data.get("evidence_coverage")
         if isinstance(ec, str):
@@ -253,7 +272,15 @@ def _normalize_structured_raw(name: str, raw: dict[str, Any]) -> dict[str, Any]:
             if key in data:
                 data[key] = _coerce_int(data[key], default=0)
         if isinstance(data.get("issues"), list):
-            data["issues"] = [_normalize_issue_dict(i) for i in data["issues"]]
+            data["issues"] = [
+                _normalize_issue_dict(
+                    i,
+                    reviewer_type=reviewer_type,
+                    section_id=section_hint,
+                    index=idx,
+                )
+                for idx, i in enumerate(data["issues"])
+            ]
 
     if name == "EditorialReview":
         ratio = data.get("duplicate_paragraph_ratio")
@@ -274,7 +301,15 @@ def _normalize_structured_raw(name: str, raw: dict[str, Any]) -> dict[str, Any]:
             if key in data:
                 data[key] = _coerce_int(data[key], default=0)
         if isinstance(data.get("issues"), list):
-            data["issues"] = [_normalize_issue_dict(i) for i in data["issues"]]
+            data["issues"] = [
+                _normalize_issue_dict(
+                    i,
+                    reviewer_type=reviewer_type,
+                    section_id=section_hint,
+                    index=idx,
+                )
+                for idx, i in enumerate(data["issues"])
+            ]
 
     return data
 
@@ -295,19 +330,120 @@ def _coerce_int(value: Any, *, default: int = 0) -> int:
     return default
 
 
-def _normalize_issue_dict(item: Any) -> Any:
-    if not isinstance(item, dict):
-        return item
-    out = dict(item)
-    sev = out.get("severity")
-    if isinstance(sev, str):
-        out["severity"] = sev.strip().upper()
-    status = out.get("status")
-    if status is None:
+def _first_str(*values: Any) -> str | None:
+    for v in values:
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
+
+
+_SEVERITY_ALIASES = {
+    "CRIT": "CRITICAL",
+    "CRITICAL": "CRITICAL",
+    "MAJOR": "MAJOR",
+    "HIGH": "MAJOR",
+    "MINOR": "MINOR",
+    "LOW": "MINOR",
+    "INFO": "MINOR",
+    "INFORMATIONAL": "MINOR",
+    "WARNING": "MINOR",
+}
+_VALID_SEVERITIES = frozenset({"CRITICAL", "MAJOR", "MINOR"})
+
+
+def _issue_id_is_garbage(iid: str) -> bool:
+    s = iid.strip()
+    if not s:
+        return True
+    if "/" in s or "\n" in s or s.startswith("//"):
+        return True
+    if len(s) > 64:
+        return True
+    return False
+
+
+def _normalize_issue_dict(
+    item: Any,
+    *,
+    reviewer_type: str,
+    section_id: str | None = None,
+    index: int = 0,
+) -> dict[str, Any]:
+    """Coerce LLM issue quirks (plain strings / partial objects) into ReviewIssue shape."""
+    if isinstance(item, str):
+        text = item.strip()
+        out: dict[str, Any] = {
+            "description": text or f"Issue {index + 1}",
+            "issue_type": "GENERAL",
+        }
+    elif isinstance(item, dict):
+        out = dict(item)
+    else:
+        out = {"description": str(item), "issue_type": "GENERAL"}
+
+    desc = _first_str(
+        out.get("description"),
+        out.get("problem"),
+        out.get("message"),
+        out.get("text"),
+        out.get("summary"),
+    )
+    if not desc:
+        desc = f"Issue {index + 1}"
+    out["description"] = desc
+
+    rec = _first_str(
+        out.get("recommendation"),
+        out.get("required_change"),
+        out.get("fix"),
+        out.get("suggestion"),
+        out.get("action"),
+    )
+    if not rec:
+        rec = "Address the described issue in the section draft."
+    out["recommendation"] = rec
+
+    itype = _first_str(out.get("issue_type"), out.get("category"), out.get("type"))
+    out["issue_type"] = (itype or "GENERAL").strip().upper().replace(" ", "_")[:64]
+
+    iid = _first_str(out.get("issue_id"), out.get("id"))
+    if not iid or _issue_id_is_garbage(iid):
+        digest = hashlib.sha1(
+            f"{reviewer_type}:{index}:{desc}".encode()
+        ).hexdigest()[:10].upper()
+        iid = f"ISS-{digest}"
+    elif not iid.upper().startswith("ISS"):
+        digest = hashlib.sha1(iid.encode()).hexdigest()[:8].upper()
+        iid = f"ISS-{digest}"
+    out["issue_id"] = iid
+
+    sid = _first_str(out.get("section_id"), section_id) or "UNKNOWN"
+    out["section_id"] = sid
+
+    rtype = _first_str(out.get("reviewer_type"), reviewer_type) or "unknown"
+    out["reviewer_type"] = rtype.strip().lower()
+
+    sev_raw = out.get("severity")
+    if isinstance(sev_raw, str):
+        key = sev_raw.strip().upper()
+        mapped = _SEVERITY_ALIASES.get(key, key)
+        out["severity"] = mapped if mapped in _VALID_SEVERITIES else "MAJOR"
+    else:
+        out["severity"] = "MAJOR"
+
+    if out.get("status") is None or not isinstance(out.get("status"), str):
         out["status"] = "OPEN"
-    if out.get("reviewer_type") is None and out.get("issue_type"):
-        # leave unset — schema may still fail; better than inventing wrong source
-        pass
+    else:
+        out["status"] = out["status"].strip().upper() or "OPEN"
+
+    refs = out.get("evidence_refs")
+    if refs is None:
+        out["evidence_refs"] = []
+    elif isinstance(refs, str):
+        out["evidence_refs"] = [refs] if refs.strip() else []
+    elif not isinstance(refs, list):
+        out["evidence_refs"] = []
+
     return out
 
 

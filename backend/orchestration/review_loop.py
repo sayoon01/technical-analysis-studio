@@ -156,6 +156,10 @@ class ReviewLoop:
         chapter_row = self.chapters.get_by_key(section["edition_id"], chapter_key)
         chapter_id = chapter_row["chapter_id"] if chapter_row else f"CH-{chapter_key}"
 
+        # Fresh review attempt: do not let stale OPEN issues from a prior failed
+        # or superseded round pollute Frontend / QualityGate inputs.
+        self.reviews.supersede_open_issues(section_id)
+
         # First round: always both reviewers (sequential).
         run_technical = True
         run_editorial = True

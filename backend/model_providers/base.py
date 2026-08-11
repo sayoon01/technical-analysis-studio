@@ -53,11 +53,13 @@ def call_ollama_json(
     temperature: float = 0.2,
     timeout: float | None = None,
     images_b64: list[str] | None = None,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     chosen = model or settings.ollama_model
     user_msg: dict[str, Any] = {"role": "user", "content": user_prompt}
     if images_b64:
         user_msg["images"] = images_b64
+    predict = int(max_tokens) if max_tokens and int(max_tokens) > 0 else 4096
     payload = {
         "model": chosen,
         "messages": [
@@ -68,7 +70,7 @@ def call_ollama_json(
         "format": "json",
         "options": {
             "temperature": temperature,
-            "num_predict": 4096,
+            "num_predict": predict,
         },
     }
     url = f"{settings.ollama_base_url.rstrip('/')}/api/chat"
@@ -117,7 +119,12 @@ def generate_structured(
     model = resolve_ollama_model(agent_name)
 
     # Field names only — full JSON Schema bloats prompts and slows 31B models.
-    fields = list(schema.model_json_schema().get("properties", {}).keys())
+    # provenance is agent-owned (online/offline), never requested from the LLM.
+    fields = [
+        k
+        for k in schema.model_json_schema().get("properties", {}).keys()
+        if k != "provenance"
+    ]
     name = schema.__name__
     if name in {"CorpusAnalysis", "ReportPlan"}:
         schema_hint = (
@@ -146,6 +153,25 @@ def generate_structured(
             "Do not wrap the object under chapter_draft/draft. "
             "Do not invent evidence_ids absent from the provided Evidence Pack."
         )
+    elif name == "TechnicalReview":
+        schema_hint = (
+            "Respond with a single JSON object using these keys only:\n"
+            f"{json.dumps(fields, ensure_ascii=False)}\n"
+            "Rules: decision is PASS|REVISE|MANUAL_REVIEW; issues is a JSON array of "
+            "objects {issue_id,section_id,reviewer_type,severity,issue_type,"
+            "description,recommendation,status}; "
+            "evidence_coverage is a float between 0 and 1 (not a percent string); "
+            "unsupported_claim_count, citation_mismatch_count, numeric_mismatch_count, "
+            "critical_issue_count are integers. Do not include provenance."
+        )
+    elif name == "EditorialReview":
+        schema_hint = (
+            "Respond with a single JSON object using these keys only:\n"
+            f"{json.dumps(fields, ensure_ascii=False)}\n"
+            "Rules: decision is PASS|REVISE|MANUAL_REVIEW; issues is a JSON array; "
+            "duplicate_paragraph_ratio is a float 0-1; counts are integers. "
+            "Do not include provenance."
+        )
     else:
         schema_hint = (
             "Respond with a single JSON object using these keys only:\n"
@@ -155,6 +181,7 @@ def generate_structured(
     sys = f"{system_prompt}\n\n{schema_hint}"
     last_err: Exception | None = None
     prompt = user_prompt
+    max_tokens = int(cfg.get("max_tokens") or 4096)
     for attempt in range(max_retries + 1):
         try:
             logger.info(
@@ -169,6 +196,7 @@ def generate_structured(
                 prompt,
                 model=model,
                 temperature=float(cfg.get("temperature", 0.2)),
+                max_tokens=max_tokens,
             )
             if name == "ChapterDraft" and isinstance(raw, dict):
                 # Tolerate legacy wrapped payloads without a second gateway.
@@ -176,6 +204,8 @@ def generate_structured(
                     raw = raw["chapter_draft"]
                 elif isinstance(raw.get("draft"), dict):
                     raw = raw["draft"]
+            if isinstance(raw, dict):
+                raw = _normalize_structured_raw(name, raw)
             return schema.model_validate(raw)
         except (LlmError, ValidationError, json.JSONDecodeError) as e:
             last_err = e
@@ -194,6 +224,91 @@ def generate_structured(
                 "Return corrected JSON only."
             )
     raise LlmError(f"Structured generation failed after retries: {last_err}")
+
+
+def _normalize_structured_raw(name: str, raw: dict[str, Any]) -> dict[str, Any]:
+    """Coerce common LLM quirks before Pydantic validation (single schema kept)."""
+    data = dict(raw)
+    # provenance is set by the agent after a successful call
+    data.pop("provenance", None)
+
+    if name == "TechnicalReview":
+        ec = data.get("evidence_coverage")
+        if isinstance(ec, str):
+            cleaned = ec.strip().replace("%", "").replace(",", ".")
+            try:
+                val = float(cleaned)
+                # "100%" / "85" → ratio when clearly a percent
+                if val > 1.0:
+                    val = val / 100.0
+                data["evidence_coverage"] = val
+            except ValueError:
+                data.pop("evidence_coverage", None)
+        for key in (
+            "unsupported_claim_count",
+            "citation_mismatch_count",
+            "numeric_mismatch_count",
+            "critical_issue_count",
+        ):
+            if key in data:
+                data[key] = _coerce_int(data[key], default=0)
+        if isinstance(data.get("issues"), list):
+            data["issues"] = [_normalize_issue_dict(i) for i in data["issues"]]
+
+    if name == "EditorialReview":
+        ratio = data.get("duplicate_paragraph_ratio")
+        if isinstance(ratio, str):
+            cleaned = ratio.strip().replace("%", "").replace(",", ".")
+            try:
+                val = float(cleaned)
+                if val > 1.0:
+                    val = val / 100.0
+                data["duplicate_paragraph_ratio"] = val
+            except ValueError:
+                data.pop("duplicate_paragraph_ratio", None)
+        for key in (
+            "promotional_phrase_count",
+            "terminology_inconsistency_count",
+            "critical_issue_count",
+        ):
+            if key in data:
+                data[key] = _coerce_int(data[key], default=0)
+        if isinstance(data.get("issues"), list):
+            data["issues"] = [_normalize_issue_dict(i) for i in data["issues"]]
+
+    return data
+
+
+def _coerce_int(value: Any, *, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        cleaned = value.strip().replace("%", "")
+        try:
+            return int(float(cleaned))
+        except ValueError:
+            return default
+    return default
+
+
+def _normalize_issue_dict(item: Any) -> Any:
+    if not isinstance(item, dict):
+        return item
+    out = dict(item)
+    sev = out.get("severity")
+    if isinstance(sev, str):
+        out["severity"] = sev.strip().upper()
+    status = out.get("status")
+    if status is None:
+        out["status"] = "OPEN"
+    if out.get("reviewer_type") is None and out.get("issue_type"):
+        # leave unset — schema may still fail; better than inventing wrong source
+        pass
+    return out
 
 
 def allow_offline_fallback() -> bool:

@@ -133,6 +133,19 @@ class ReviewRepository:
             out.append(d)
         return out
 
+    def supersede_open_issues(self, section_id: str) -> int:
+        """Mark prior OPEN issues superseded so a fresh review round is clean."""
+        cur = self.conn.execute(
+            """
+            UPDATE review_issues
+            SET status = 'SUPERSEDED'
+            WHERE section_id = ? AND status = 'OPEN'
+            """,
+            (section_id,),
+        )
+        self.conn.commit()
+        return int(cur.rowcount or 0)
+
     def list_full_report_reviews(self, edition_id: str) -> list[dict]:
         synthetic_section_id = f"FULL-{edition_id}"
         rows = self.conn.execute(

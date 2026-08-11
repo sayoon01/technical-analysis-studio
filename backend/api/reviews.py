@@ -5,6 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from backend.api.deps import get_review_service
+from backend.api.errors import http_from_llm_error
+from backend.model_providers.base import LlmError
 
 router = APIRouter(tags=["reviews"])
 
@@ -17,6 +19,8 @@ def review_edition(edition_id: str):
         raise HTTPException(404, "Edition not found") from None
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
+    except LlmError as e:
+        raise http_from_llm_error(e, role="Technical/editorial review") from e
 
 
 @router.post("/api/editions/{edition_id}/review/full")
@@ -27,6 +31,8 @@ def review_full_report(edition_id: str):
         raise HTTPException(404, "Edition not found") from None
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
+    except LlmError as e:
+        raise http_from_llm_error(e, role="Full-report review") from e
 
 
 @router.post("/api/sections/{section_id}/review")
@@ -37,6 +43,8 @@ def review_section(section_id: str):
         raise HTTPException(404, "Section not found") from None
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
+    except LlmError as e:
+        raise http_from_llm_error(e, role="Section review") from e
 
 
 @router.get("/api/sections/{section_id}/reviews")

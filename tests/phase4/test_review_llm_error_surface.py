@@ -235,6 +235,60 @@ def test_partial_review_retry_supersedes_open_issues(tmp_path):
     assert "supersede_open_issues" in src
 
 
+def test_save_technical_remints_colliding_issue_ids(tmp_path):
+    """issue_id is a global PK — colliding LLM ids must not abort persistence."""
+    db = tmp_path / "collide.db"
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    init_schema(conn)
+    reviews = ReviewRepository(conn)
+    from backend.domain.enums import IssueSeverity, ReviewDecision
+    from backend.domain.review import ReviewIssue, TechnicalReview
+
+    first = TechnicalReview(
+        decision=ReviewDecision.REVISE,
+        issues=[
+            ReviewIssue(
+                issue_id="ISS-SAME",
+                section_id="SEC-A",
+                reviewer_type="technical",
+                severity=IssueSeverity.MAJOR,
+                issue_type="X",
+                description="a",
+                recommendation="fix",
+            )
+        ],
+    )
+    reviews.save_technical("SEC-A", first)
+    reviews.supersede_open_issues("SEC-A")
+
+    second = TechnicalReview(
+        decision=ReviewDecision.REVISE,
+        issues=[
+            ReviewIssue(
+                issue_id="ISS-SAME",  # collide with SUPERSEDED row
+                section_id="SEC-B",
+                reviewer_type="technical",
+                severity=IssueSeverity.MINOR,
+                issue_type="Y",
+                description="b",
+                recommendation="fix",
+            )
+        ],
+    )
+    rid = reviews.save_technical("SEC-B", second)
+    assert rid.startswith("RV-")
+    rows = list(
+        conn.execute(
+            "SELECT issue_id, section_id, status FROM review_issues WHERE section_id='SEC-B'"
+        )
+    )
+    assert len(rows) == 1
+    assert rows[0]["issue_id"] != "ISS-SAME"
+    assert rows[0]["issue_id"].startswith("ISS-")
+    assert rows[0]["status"] == "OPEN"
+
+
 def test_busy_cleanup_on_llm_error(monkeypatch):
     from backend.services import review_service as rs_mod
     from backend.services.job_status import get_job

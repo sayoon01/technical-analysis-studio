@@ -53,6 +53,27 @@ class ReviewRepository:
 
     def _save(self, section_id: str, reviewer_type: str, decision: str, payload: dict, issues) -> str:
         review_id = f"RV-{uuid.uuid4().hex[:10].upper()}"
+        # issue_id is a global PRIMARY KEY. LLM/hash ids can collide with
+        # SUPERSEDED rows from prior rounds or other sections — remint locally.
+        remapped = []
+        for iss in issues:
+            iid = getattr(iss, "issue_id", None) or f"ISS-{uuid.uuid4().hex[:10].upper()}"
+            if self.conn.execute(
+                "SELECT 1 FROM review_issues WHERE issue_id = ?", (iid,)
+            ).fetchone():
+                iid = f"ISS-{uuid.uuid4().hex[:10].upper()}"
+            if hasattr(iss, "model_copy") and iid != iss.issue_id:
+                iss = iss.model_copy(update={"issue_id": iid})
+            elif hasattr(iss, "issue_id"):
+                iss.issue_id = iid
+            remapped.append(iss)
+        if isinstance(payload, dict) and remapped and "issues" in payload:
+            payload = dict(payload)
+            payload["issues"] = [
+                i.model_dump(mode="json") if hasattr(i, "model_dump") else dict(i)
+                for i in remapped
+            ]
+
         self.conn.execute(
             """
             INSERT INTO reviews (review_id, section_id, reviewer_type, decision, payload_json, created_at)
@@ -67,7 +88,7 @@ class ReviewRepository:
                 _now(),
             ),
         )
-        for iss in issues:
+        for iss in remapped:
             self.conn.execute(
                 """
                 INSERT INTO review_issues (

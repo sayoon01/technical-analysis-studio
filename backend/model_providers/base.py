@@ -179,6 +179,16 @@ def generate_structured(
             "duplicate_paragraph_ratio is a float 0-1; counts are integers. "
             "Do not include provenance."
         )
+    elif name == "RevisionResult":
+        schema_hint = (
+            "Respond with a single JSON object using these keys only:\n"
+            f"{json.dumps(fields, ensure_ascii=False)}\n"
+            "Rules: revision is an integer; updated_content is the full revised "
+            "markdown string; changes MUST be a JSON array of objects (never plain "
+            "strings), each like {change_type,reason,issue_id?}; "
+            "resolved_issue_ids is a JSON array of issue_id strings. "
+            "Do not include provenance."
+        )
     else:
         schema_hint = (
             "Respond with a single JSON object using these keys only:\n"
@@ -211,6 +221,13 @@ def generate_structured(
                     raw = raw["chapter_draft"]
                 elif isinstance(raw.get("draft"), dict):
                     raw = raw["draft"]
+            if name == "RevisionResult" and isinstance(raw, dict):
+                if isinstance(raw.get("revision_result"), dict):
+                    raw = raw["revision_result"]
+                elif isinstance(raw.get("result"), dict) and (
+                    "updated_content" in raw["result"] or "changes" in raw["result"]
+                ):
+                    raw = raw["result"]
             if isinstance(raw, dict):
                 raw = _normalize_structured_raw(name, raw)
             return schema.model_validate(raw)
@@ -311,7 +328,75 @@ def _normalize_structured_raw(name: str, raw: dict[str, Any]) -> dict[str, Any]:
                 for idx, i in enumerate(data["issues"])
             ]
 
+    if name == "RevisionResult":
+        # Alias content fields without inventing body text.
+        if not _first_str(data.get("updated_content")):
+            alt = _first_str(
+                data.get("content"),
+                data.get("markdown"),
+                data.get("revised_content"),
+                data.get("updated_markdown"),
+            )
+            if alt:
+                data["updated_content"] = alt
+        if "revision" in data:
+            data["revision"] = _coerce_int(data["revision"], default=1)
+        if isinstance(data.get("changes"), list):
+            data["changes"] = [
+                _normalize_change_item(item, index=idx)
+                for idx, item in enumerate(data["changes"])
+            ]
+        elif data.get("changes") is None:
+            data["changes"] = []
+        else:
+            # Single string / unexpected scalar → one change object
+            data["changes"] = [_normalize_change_item(data["changes"], index=0)]
+        data["resolved_issue_ids"] = _normalize_id_list(
+            data.get("resolved_issue_ids")
+        )
+
     return data
+
+
+def _normalize_change_item(item: Any, *, index: int = 0) -> dict[str, Any]:
+    """Coerce LLM change quirks (plain strings) into offline-compatible dicts."""
+    if isinstance(item, dict):
+        out = dict(item)
+        # Ensure at least one human-readable field exists for downstream logs/UI.
+        if not _first_str(
+            out.get("reason"),
+            out.get("description"),
+            out.get("summary"),
+            out.get("message"),
+        ):
+            out["reason"] = f"change {index + 1}"
+        out["change_type"] = (
+            _first_str(out.get("change_type"), out.get("type")) or "NOTE"
+        )
+        return out
+    if isinstance(item, str):
+        text = item.strip().lstrip("-•* ").strip() or f"change {index + 1}"
+        return {"change_type": "NOTE", "reason": text}
+    return {"change_type": "NOTE", "reason": str(item)}
+
+
+def _normalize_id_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            out.append(item.strip())
+        elif isinstance(item, dict):
+            iid = _first_str(item.get("issue_id"), item.get("id"))
+            if iid:
+                out.append(iid)
+    return out
 
 
 def _coerce_int(value: Any, *, default: int = 0) -> int:

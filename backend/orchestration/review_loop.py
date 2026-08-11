@@ -37,6 +37,24 @@ logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 
+# Edition retry policy (internal; no new Frontend enum).
+# TERMINAL_AUTOMATIC: Quality Gate PASS — do not re-run LLM review.
+# TERMINAL_MANUAL: max-revision / human-action outcome — do not auto-retry.
+# RETRYABLE: DRAFT / REVISING / other incomplete statuses — re-enter ReviewLoop.
+_TERMINAL_AUTOMATIC = frozenset({"PASSED"})
+_TERMINAL_MANUAL = frozenset({"MANUAL_REVIEW"})
+_EDITION_RETRY_SKIP = _TERMINAL_AUTOMATIC | _TERMINAL_MANUAL
+
+
+def is_edition_retry_skip(status: str | None) -> bool:
+    """True when edition-level review should not re-run this section."""
+    return (status or "").strip().upper() in _EDITION_RETRY_SKIP
+
+
+def is_retryable_review_status(status: str | None) -> bool:
+    """True when section may re-enter ReviewLoop on edition retry."""
+    return not is_edition_retry_skip(status)
+
 
 class ReviewLoop:
     def __init__(
@@ -78,11 +96,7 @@ class ReviewLoop:
         self.projects.update_stage(project_id, ProjectStage.REVIEWING.value)
 
         sections = list(self.sections.list_for_edition(edition_id))
-        pending = [
-            s
-            for s in sections
-            if (s.get("status") or "").upper() != "PASSED"
-        ]
+        pending = [s for s in sections if is_retryable_review_status(s.get("status"))]
         total = len(pending)
         completed = 0
         self._emit_progress(
@@ -98,7 +112,7 @@ class ReviewLoop:
         manual = False
         for section in sections:
             status = (section.get("status") or "").upper()
-            if status == "PASSED":
+            if status in _TERMINAL_AUTOMATIC:
                 results.append(
                     {
                         "section_id": section["section_id"],
@@ -108,6 +122,20 @@ class ReviewLoop:
                         "skipped": True,
                     }
                 )
+                continue
+            if status in _TERMINAL_MANUAL:
+                # MANUAL_REVIEW is a human-action terminal: do not re-burn LLM.
+                results.append(
+                    {
+                        "section_id": section["section_id"],
+                        "status": "MANUAL_REVIEW",
+                        "revision": int(section.get("revision_count") or 1),
+                        "history": [],
+                        "skipped": True,
+                    }
+                )
+                all_pass = False
+                manual = True
                 continue
             self._emit_progress(
                 current_section=section["section_id"],

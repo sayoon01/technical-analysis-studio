@@ -117,6 +117,88 @@ def test_normalize_technical_issues_string_list():
     assert obj.issues[0].section_id == "UNKNOWN"
 
 
+def test_normalize_revision_result_changes_from_string_list():
+    from backend.domain.review import RevisionResult
+
+    raw = {
+        "revision": "2",
+        "updated_content": "Revised chapter body with citations intact.\n",
+        "changes": [
+            "- Fixed citation mismatch between claim and pack.",
+            "- Clarified Wireless API terminology.",
+        ],
+        "resolved_issue_ids": ["ISS-1", {"issue_id": "ISS-2"}],
+        "provenance": {"noise": True},
+    }
+    fixed = _normalize_structured_raw("RevisionResult", raw)
+    assert "provenance" not in fixed
+    assert fixed["revision"] == 2
+    assert all(isinstance(c, dict) for c in fixed["changes"])
+    assert fixed["changes"][0]["reason"].startswith("Fixed citation")
+    assert fixed["changes"][0]["change_type"] == "NOTE"
+    assert fixed["resolved_issue_ids"] == ["ISS-1", "ISS-2"]
+    obj = RevisionResult.model_validate(fixed)
+    assert len(obj.changes) == 2
+    assert obj.updated_content.startswith("Revised")
+
+
+def test_normalize_revision_result_unwrap_and_content_alias():
+    from backend.domain.review import RevisionResult
+
+    raw = {
+        "revision_result": {
+            "revision": 1,
+            "markdown": "Body from alias field.",
+            "changes": [{"change_type": "STRIP", "reason": "markers"}],
+            "resolved_issue_ids": [],
+        }
+    }
+    # unwrap happens in generate_structured; normalize expects inner dict
+    inner = raw["revision_result"]
+    fixed = _normalize_structured_raw("RevisionResult", inner)
+    obj = RevisionResult.model_validate(fixed)
+    assert obj.updated_content == "Body from alias field."
+
+
+def test_normalize_revision_result_missing_content_still_fails():
+    from pydantic import ValidationError
+
+    from backend.domain.review import RevisionResult
+
+    raw = {
+        "revision": 1,
+        "changes": ["only a note"],
+        "resolved_issue_ids": [],
+    }
+    fixed = _normalize_structured_raw("RevisionResult", raw)
+    with pytest.raises(ValidationError):
+        RevisionResult.model_validate(fixed)
+
+
+def test_safe_review_error_stage_specific():
+    from backend.services.review_service import _safe_review_error
+
+    exc = LlmError(
+        "Structured generation failed after retries: "
+        "changes.0 Input should be a valid dictionary"
+    )
+    assert (
+        _safe_review_error(exc, failed_step="revising")
+        == "Revision model output validation failed"
+    )
+    assert (
+        _safe_review_error(exc, failed_step="technical_review")
+        == "Technical review model output validation failed"
+    )
+    assert (
+        _safe_review_error(exc, failed_step="editorial_review")
+        == "Editorial review model output validation failed"
+    )
+    # Unknown step: generic validation (not the old technical/editorial blob)
+    msg = _safe_review_error(exc, failed_step="starting")
+    assert msg == "Review model output validation failed"
+    assert "Technical/editorial" not in msg
+
 
 def test_http_from_llm_error_is_502_safe():
     exc = LlmError(

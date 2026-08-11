@@ -321,6 +321,18 @@ def test_memory_from_skipped_rejects_draft():
         {"node_id": "N1", "title": "t"},
     )
     assert len(out.chapter_summaries) == 0
+    for terminalish in ("MANUAL_REVIEW", "REVISING"):
+        out_bad = ProductionPipeline._memory_from_skipped_section(
+            pipe,
+            mem,
+            {
+                "status": terminalish,
+                "title": "t",
+                "content_markdown": "x" * 100,
+            },
+            {"node_id": "N1", "title": "t"},
+        )
+        assert len(out_bad.chapter_summaries) == 0
     out2 = ProductionPipeline._memory_from_skipped_section(
         pipe,
         mem,

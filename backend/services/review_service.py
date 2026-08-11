@@ -12,7 +12,7 @@ import threading
 from typing import Any
 
 from backend.model_providers.base import LlmError
-from backend.orchestration.review_loop import ReviewLoop
+from backend.orchestration.review_loop import ReviewLoop, is_edition_retry_skip
 from backend.services.job_status import (
     finish_job,
     lock_for,
@@ -26,8 +26,14 @@ from backend.storage.review_repository import ReviewRepository
 logger = logging.getLogger(__name__)
 
 
-def _safe_review_error(exc: BaseException) -> str:
-    """User-safe failure text — no traceback / prompts / secrets."""
+def _safe_review_error(
+    exc: BaseException, *, failed_step: str | None = None
+) -> str:
+    """User-safe failure text — no traceback / prompts / secrets.
+
+    Validation messages are stage-specific when ``failed_step`` is known
+    (technical_review / editorial_review / revising).
+    """
     if isinstance(exc, LlmError):
         text = str(exc).splitlines()[0].strip()
         if len(text) > 240:
@@ -37,7 +43,14 @@ def _safe_review_error(exc: BaseException) -> str:
             if needle in lower:
                 return "Review model request failed"
         if "validation" in lower or "structured generation" in lower:
-            return "Technical/editorial review model output validation failed"
+            step = (failed_step or "").strip().lower()
+            if step in {"revising", "revision", "revise"}:
+                return "Revision model output validation failed"
+            if step in {"editorial_review", "editorial"}:
+                return "Editorial review model output validation failed"
+            if step in {"technical_review", "technical"}:
+                return "Technical review model output validation failed"
+            return "Review model output validation failed"
         if "timed out" in lower:
             return "Review model request timed out"
         return f"Review model request failed: {text}"
@@ -87,8 +100,11 @@ class ReviewService:
             raise KeyError(edition_id)
         project_id = edition["project_id"]
         sections = self.sections.list_for_edition(edition_id)
+        sections = self.sections.list_for_edition(edition_id)
         total = sum(
-            1 for s in sections if (s.get("status") or "").upper() != "PASSED"
+            1
+            for s in sections
+            if not is_edition_retry_skip(s.get("status") or "")
         )
 
         lock = lock_for(project_id)
@@ -147,7 +163,7 @@ class ReviewService:
                 )
                 finish_job(
                     project_id,
-                    error=_safe_review_error(exc),
+                    error=_safe_review_error(exc, failed_step=failed_step),
                     failed_step=failed_step,
                     failed_section=failed_section,
                 )

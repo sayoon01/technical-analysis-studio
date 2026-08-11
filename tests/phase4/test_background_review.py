@@ -328,3 +328,197 @@ def test_existing_sync_review_edition_still_blocks_and_returns(env, clean_jobs):
     result = svc.review_edition(produced["edition_id"])
     assert "all_passed" in result
     assert js.get_job(project["project_id"]) is None
+
+
+def test_edition_retry_skips_passed_and_manual_review_runs_revising(
+    env, monkeypatch
+):
+    from backend.orchestration.review_loop import (
+        is_edition_retry_skip,
+        is_retryable_review_status,
+    )
+
+    assert is_edition_retry_skip("PASSED")
+    assert is_edition_retry_skip("MANUAL_REVIEW")
+    assert is_retryable_review_status("REVISING")
+    assert is_retryable_review_status("DRAFT")
+
+    conn, store, tmp_path, data = env
+    _project, produced, editions = _produce_edition(conn, store, tmp_path, data)
+    sections = list(editions.sections.list_for_edition(produced["edition_id"]))
+    assert len(sections) >= 3
+    s_pass, s_manual, s_revising = sections[0], sections[1], sections[2]
+    editions.sections.update(s_pass["section_id"], status="PASSED", revision_count=1)
+    editions.sections.update(
+        s_manual["section_id"], status="MANUAL_REVIEW", revision_count=2
+    )
+    editions.sections.update(
+        s_revising["section_id"], status="REVISING", revision_count=1
+    )
+    for s in sections[3:]:
+        editions.sections.update(s["section_id"], status="DRAFT")
+
+    reviews = ReviewRepository(conn)
+    reviews.save_technical(
+        s_revising["section_id"],
+        TechnicalReview(
+            decision=ReviewDecision.REVISE,
+            issues=[_issue(s_revising["section_id"], "ISS-STALE")],
+            unsupported_claim_count=1,
+        ),
+    )
+    assert reviews.open_issues(s_revising["section_id"])
+
+    ran: list[str] = []
+    loop = ReviewLoop(conn, llm_mode="offline", max_revisions=2)
+
+    def tracking_run_section(section_id: str):
+        ran.append(section_id)
+        loop.reviews.supersede_open_issues(section_id)
+        editions.sections.update(section_id, status="PASSED")
+        return {
+            "section_id": section_id,
+            "status": "PASSED",
+            "revision": 1,
+            "history": [],
+        }
+
+    monkeypatch.setattr(loop, "run_section", tracking_run_section)
+    monkeypatch.setattr(
+        loop,
+        "run_full_report",
+        lambda _eid: {
+            "edition_id": produced["edition_id"],
+            "status": "PASSED",
+            "issues": [],
+        },
+    )
+
+    result = loop.run_edition(produced["edition_id"])
+    skipped = {r["section_id"]: r for r in result["sections"] if r.get("skipped")}
+    assert s_pass["section_id"] in skipped
+    assert skipped[s_pass["section_id"]]["status"] == "PASSED"
+    assert s_manual["section_id"] in skipped
+    assert skipped[s_manual["section_id"]]["status"] == "MANUAL_REVIEW"
+    assert s_revising["section_id"] in ran
+    assert s_pass["section_id"] not in ran
+    assert s_manual["section_id"] not in ran
+    assert result["manual_review"] is True
+    assert result["all_passed"] is False
+    assert reviews.open_issues(s_revising["section_id"]) == []
+
+
+def test_revising_section_reenters_without_forced_draft(env, monkeypatch):
+    """REVISING mid-failure must re-enter ReviewLoop without DB status hack."""
+    conn, store, tmp_path, data = env
+    _project, produced, editions = _produce_edition(conn, store, tmp_path, data)
+    section_id = produced["sections"][0]["section_id"]
+    editions.sections.update(section_id, status="REVISING", revision_count=1)
+    before = editions.sections.get(section_id)
+    assert before["status"] == "REVISING"
+    rev_before = int(before.get("revision_count") or 1)
+
+    loop = ReviewLoop(conn, llm_mode="offline", max_revisions=2)
+    monkeypatch.setattr(
+        loop.technical,
+        "run",
+        lambda **_k: TechnicalReview(
+            decision=ReviewDecision.PASS, provenance="offline"
+        ),
+    )
+    monkeypatch.setattr(
+        loop.editorial,
+        "run",
+        lambda **_k: EditorialReview(
+            decision=ReviewDecision.PASS, provenance="offline"
+        ),
+    )
+    outcome = loop.run_section(section_id)
+    assert outcome["status"] == "PASSED"
+    after = editions.sections.get(section_id)
+    assert after["status"] == "PASSED"
+    assert int(after.get("revision_count") or 1) == rev_before
+
+
+def test_reviser_agent_accepts_normalized_string_changes(monkeypatch):
+    from backend.agents.reviser.agent import ReviserAgent
+    from backend.domain.evidence import EvidencePack
+    from backend.domain.review import RevisionResult
+
+    monkeypatch.setenv("TAS_LLM_MODE", "llm")
+    from backend import config
+
+    monkeypatch.setattr(
+        config,
+        "settings",
+        config.Settings(llm_mode="llm", max_revisions=2),
+    )
+
+    def fake_ollama(_sys, _user, **_k):
+        return {
+            "revision": 2,
+            "updated_content": "Normalized revise body.\n",
+            "changes": [
+                "- Fixed citation mismatch ...",
+                "- Tightened terminology",
+            ],
+            "resolved_issue_ids": [],
+        }
+
+    monkeypatch.setattr(
+        "backend.model_providers.base.call_ollama_json", fake_ollama
+    )
+    agent = ReviserAgent(llm_mode="llm")
+    result = agent.run(
+        title="Wireless API",
+        objective="o",
+        markdown="body",
+        pack=EvidencePack(section_id="SEC-1", section_objective="o"),
+        technical=TechnicalReview(decision=ReviewDecision.REVISE),
+        editorial=EditorialReview(decision=ReviewDecision.PASS),
+        revision=2,
+        aggregated_issues=[],
+    )
+    assert isinstance(result, RevisionResult)
+    assert all(isinstance(c, dict) for c in result.changes)
+    assert result.changes[0]["change_type"] == "NOTE"
+    assert "citation" in result.changes[0]["reason"].lower()
+    assert result.provenance == "online"
+
+
+def test_safe_error_revising_on_background_failure(clean_jobs, monkeypatch):
+    from backend.services.review_service import _safe_review_error
+
+    msg = _safe_review_error(
+        LlmError("Structured generation failed after retries: changes.0"),
+        failed_step="revising",
+    )
+    assert msg == "Revision model output validation failed"
+
+    conn = MagicMock()
+    svc = ReviewService(conn, llm_mode="offline")
+    svc.editions.get = MagicMock(  # type: ignore[method-assign]
+        return_value={"edition_id": "ED-R", "project_id": "PRJ-R"}
+    )
+    svc.sections.list_for_edition = MagicMock(  # type: ignore[method-assign]
+        return_value=[
+            {"section_id": "SEC-1", "status": "REVISING", "title": "Wireless"},
+            {"section_id": "SEC-2", "status": "PASSED", "title": "Done"},
+            {"section_id": "SEC-3", "status": "MANUAL_REVIEW", "title": "Human"},
+        ]
+    )
+
+    def boom_connect():
+        raise LlmError("Structured generation failed after retries: validation")
+
+    monkeypatch.setattr("backend.services.review_service.connect", boom_connect)
+    out = svc.start_edition_review("ED-R")
+    # Only REVISING is retryable; PASSED + MANUAL_REVIEW skipped in total
+    assert out["total_sections"] == 1
+    deadline = time.time() + 5
+    while time.time() < deadline and js.get_job("PRJ-R") is not None:
+        time.sleep(0.05)
+    outcome = js.get_job_outcome("PRJ-R")
+    assert outcome and outcome.get("error")
+    assert "traceback" not in outcome["error"].lower()
+    assert "password" not in outcome["error"].lower()

@@ -17,8 +17,10 @@
 
 `RevisionResult` JSON.
 
-필수 필드:
-- `revision`: integer
-- `updated_content`: 수정된 전체 markdown 문자열
-- `changes`: **object 배열** (문자열 배열 금지). 각 객체는 `{change_type, reason}` 필수, `issue_id` 선택
+핵심 필드:
+- `updated_content`: 수정된 전체 markdown 문자열 (필수)
+- `changes`: **object 배열** (문자열 배열 금지). 각 객체는 `{change_type, reason}` 권장, `issue_id` 선택
 - `resolved_issue_ids`: 해결한 `issue_id` 문자열 배열
+
+참고:
+- `revision`과 `provenance`는 Runtime/Workflow가 최종 소유한다.

@@ -115,6 +115,7 @@ def generate_structured(
     *,
     agent_name: str,
     max_retries: int = 2,
+    normalize_context: dict[str, Any] | None = None,
 ) -> T:
     cfg = agent_model_config(agent_name)
     model = resolve_ollama_model(agent_name)
@@ -229,7 +230,9 @@ def generate_structured(
                 ):
                     raw = raw["result"]
             if isinstance(raw, dict):
-                raw = _normalize_structured_raw(name, raw)
+                raw = _normalize_structured_raw(
+                    name, raw, normalize_context=normalize_context
+                )
             return schema.model_validate(raw)
         except (LlmError, ValidationError, json.JSONDecodeError) as e:
             last_err = e
@@ -250,7 +253,12 @@ def generate_structured(
     raise LlmError(f"Structured generation failed after retries: {last_err}")
 
 
-def _normalize_structured_raw(name: str, raw: dict[str, Any]) -> dict[str, Any]:
+def _normalize_structured_raw(
+    name: str,
+    raw: dict[str, Any],
+    *,
+    normalize_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Coerce common LLM quirks before Pydantic validation (single schema kept)."""
     data = dict(raw)
     # provenance is set by the agent after a successful call
@@ -329,6 +337,7 @@ def _normalize_structured_raw(name: str, raw: dict[str, Any]) -> dict[str, Any]:
             ]
 
     if name == "RevisionResult":
+        ctx = normalize_context or {}
         # Alias content fields without inventing body text.
         if not _first_str(data.get("updated_content")):
             alt = _first_str(
@@ -336,11 +345,21 @@ def _normalize_structured_raw(name: str, raw: dict[str, Any]) -> dict[str, Any]:
                 data.get("markdown"),
                 data.get("revised_content"),
                 data.get("updated_markdown"),
+                data.get("revised_markdown"),
+                data.get("body"),
             )
             if alt:
                 data["updated_content"] = alt
-        if "revision" in data:
+        # empty body is invalid: no fake success with inherited markdown
+        if not _first_str(data.get("updated_content")):
+            data.pop("updated_content", None)
+        if ctx.get("expected_revision") is not None:
+            # revision is workflow-owned deterministic field.
+            data["revision"] = _coerce_int(ctx["expected_revision"], default=1)
+        elif "revision" in data:
             data["revision"] = _coerce_int(data["revision"], default=1)
+        else:
+            data["revision"] = 1
         if isinstance(data.get("changes"), list):
             data["changes"] = [
                 _normalize_change_item(item, index=idx)

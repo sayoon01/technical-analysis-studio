@@ -142,6 +142,42 @@ def test_normalize_revision_result_changes_from_string_list():
     assert obj.updated_content.startswith("Revised")
 
 
+def test_normalize_revision_result_revision_is_workflow_owned():
+    from backend.domain.review import RevisionResult
+
+    raw = {
+        "revision": "2",
+        "updated_content": "Revised body\n",
+        "changes": ["- Fixed citation mismatch"],
+        "resolved_issue_ids": [],
+    }
+    fixed = _normalize_structured_raw(
+        "RevisionResult",
+        raw,
+        normalize_context={"expected_revision": 3},
+    )
+    obj = RevisionResult.model_validate(fixed)
+    assert obj.revision == 3
+
+
+def test_normalize_revision_result_wrong_revision_overridden_by_expected():
+    from backend.domain.review import RevisionResult
+
+    raw = {
+        "revision": 999,
+        "updated_content": "Revised body\n",
+        "changes": ["- Fixed citation mismatch"],
+        "resolved_issue_ids": [],
+    }
+    fixed = _normalize_structured_raw(
+        "RevisionResult",
+        raw,
+        normalize_context={"expected_revision": 2},
+    )
+    obj = RevisionResult.model_validate(fixed)
+    assert obj.revision == 2
+
+
 def test_normalize_revision_result_unwrap_and_content_alias():
     from backend.domain.review import RevisionResult
 
@@ -175,6 +211,49 @@ def test_normalize_revision_result_missing_content_still_fails():
         RevisionResult.model_validate(fixed)
 
 
+def test_normalize_revision_result_empty_content_fails():
+    from pydantic import ValidationError
+
+    from backend.domain.review import RevisionResult
+
+    raw = {
+        "revision": 1,
+        "updated_content": "   ",
+        "changes": ["only a note"],
+        "resolved_issue_ids": [],
+    }
+    fixed = _normalize_structured_raw("RevisionResult", raw)
+    with pytest.raises(ValidationError):
+        RevisionResult.model_validate(fixed)
+
+
+def test_normalize_revision_result_content_aliases_body_and_revised_markdown():
+    from backend.domain.review import RevisionResult
+
+    raw_body = {
+        "revision": 1,
+        "body": "Body alias text",
+        "changes": ["- c1"],
+        "resolved_issue_ids": None,
+    }
+    fixed_body = _normalize_structured_raw("RevisionResult", raw_body)
+    obj_body = RevisionResult.model_validate(fixed_body)
+    assert obj_body.updated_content == "Body alias text"
+
+    raw_rm = {
+        "revision": 1,
+        "revised_markdown": "RM alias text",
+        "changes": ["- c1"],
+        "resolved_issue_ids": "ISS-1",
+        "provenance": 1234,
+    }
+    fixed_rm = _normalize_structured_raw("RevisionResult", raw_rm)
+    obj_rm = RevisionResult.model_validate(fixed_rm)
+    assert obj_rm.updated_content == "RM alias text"
+    assert obj_rm.resolved_issue_ids == ["ISS-1"]
+    assert obj_rm.provenance == "online"
+
+
 def test_safe_review_error_stage_specific():
     from backend.services.review_service import _safe_review_error
 
@@ -198,6 +277,69 @@ def test_safe_review_error_stage_specific():
     msg = _safe_review_error(exc, failed_step="starting")
     assert msg == "Review model output validation failed"
     assert "Technical/editorial" not in msg
+
+
+def test_normalize_revision_result_missing_revision_uses_context():
+    from backend.domain.review import RevisionResult
+
+    raw = {
+        "updated_content": "Revised body.\n",
+        "changes": ["- Fixed citation mismatch"],
+        "resolved_issue_ids": [],
+    }
+    fixed = _normalize_structured_raw(
+        "RevisionResult",
+        raw,
+        normalize_context={"expected_revision": 2},
+    )
+    obj = RevisionResult.model_validate(fixed)
+    assert obj.revision == 2
+    assert obj.changes[0]["change_type"] == "NOTE"
+
+
+def test_reviser_no_silent_fallback_and_malformed_changes_fail(monkeypatch):
+    from backend.agents.reviser.agent import ReviserAgent
+    from backend.domain.evidence import EvidencePack
+    from backend.domain.review import EditorialReview, TechnicalReview
+    from backend.domain.enums import ReviewDecision
+
+    monkeypatch.setenv("TAS_LLM_MODE", "llm")
+    from backend import config
+
+    monkeypatch.setattr(
+        config,
+        "settings",
+        config.Settings(llm_mode="llm", max_revisions=2),
+    )
+
+    def fake_generate(*_a, **_k):
+        from backend.domain.review import RevisionResult
+
+        return RevisionResult.model_validate(
+            {
+                "revision": 2,
+                "updated_content": "본문\n",
+                "changes": [{"change_type": "NOTE", "reason": ""}],
+                "resolved_issue_ids": [],
+            }
+        )
+
+    monkeypatch.setattr(
+        "backend.agents.reviser.agent.generate_structured",
+        fake_generate,
+    )
+
+    agent = ReviserAgent(llm_mode="llm")
+    with pytest.raises(LlmError, match="malformed changes"):
+        agent.run(
+            title="Wireless API",
+            objective="obj",
+            markdown="draft",
+            pack=EvidencePack(section_id="SEC-1", section_objective="o"),
+            technical=TechnicalReview(decision=ReviewDecision.REVISE),
+            editorial=EditorialReview(decision=ReviewDecision.PASS),
+            revision=2,
+        )
 
 
 def test_http_from_llm_error_is_502_safe():

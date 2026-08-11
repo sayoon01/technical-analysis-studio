@@ -78,9 +78,12 @@ class ReviserAgent:
                 instruction,
                 user,
                 agent_name="reviser",
+                normalize_context={"expected_revision": revision},
             )
             if not (refined.updated_content or "").strip():
                 raise LlmError("Reviser returned empty content")
+            if any(not _has_meaningful_change(c) for c in refined.changes):
+                raise LlmError("Reviser returned malformed changes")
             if locked_paragraph_texts:
                 refined.updated_content = _preserve_locked_snippets(
                     refined.updated_content, locked_paragraph_texts
@@ -106,3 +109,12 @@ def _preserve_locked_snippets(content: str, locked_texts: list[str]) -> str:
         return out
     appendix = "\n\n".join(t.strip() for t in missing)
     return (out.rstrip() + "\n\n" + appendix + "\n") if out.strip() else appendix + "\n"
+
+
+def _has_meaningful_change(change: dict) -> bool:
+    return bool(
+        (change.get("reason") and str(change.get("reason")).strip())
+        or (change.get("description") and str(change.get("description")).strip())
+        or (change.get("summary") and str(change.get("summary")).strip())
+        or (change.get("message") and str(change.get("message")).strip())
+    )

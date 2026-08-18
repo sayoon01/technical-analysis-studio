@@ -1,22 +1,10 @@
-"""Google ADK model factory using LiteLlm + Ollama."""
+"""Legacy shim for ADK model construction."""
 
 from __future__ import annotations
 
-from backend.config import settings
+from backend.adk_app.model_adapter import build_agent_model
 
 
 def build_litellm_model(model_id: str | None = None):
-    """Create LiteLlm model with ollama_chat naming convention.
-
-    Import is lazy so test/offline environments without google-adk installed
-    can still import this module safely.
-    """
-    from google.adk.models.lite_llm import LiteLlm
-
-    resolved = (model_id or settings.ollama_model).strip()
-    if not resolved:
-        raise ValueError("model_id is required")
-    return LiteLlm(
-        model=f"ollama_chat/{resolved}",
-        api_base=settings.ollama_base_url,
-    )
+    # model_id is ignored; agent role controls model selection.
+    return build_agent_model("corpus_analyst")

@@ -14,6 +14,7 @@ from backend.services.export_service import ExportService
 from backend.services.plan_service import PlanService
 from backend.services.project_service import ProjectService, SourceService
 from backend.services.review_service import ReviewService
+from backend.application.analyze_jobs import AnalyzeJobUseCase
 from backend.storage.database import connect
 from backend.storage.file_store import FileStore
 
@@ -38,6 +39,10 @@ def get_source_service() -> SourceService:
 
 def get_plan_service() -> PlanService:
     return PlanService(get_connection())
+
+
+def get_analyze_job_usecase() -> AnalyzeJobUseCase:
+    return AnalyzeJobUseCase(get_connection())
 
 
 def get_edition_service() -> EditionService:

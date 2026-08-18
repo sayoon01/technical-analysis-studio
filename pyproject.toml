@@ -5,8 +5,10 @@ description = "ADK-based evidence-driven technical analysis report studio"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "google-adk>=2,<3",
-  "litellm",
+  "google-adk[db]==2.3.0",
+  "litellm==1.83.7",
+  "sqlalchemy==2.0.51",
+  "aiosqlite==0.22.1",
   "fastapi>=0.115",
   "uvicorn[standard]>=0.30",
   "pydantic>=2.7",

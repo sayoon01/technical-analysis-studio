@@ -1,5 +1,5 @@
-"""ADK application package for phase-based workflow migration."""
+"""ADK application package for technical analysis runtime."""
 
-from backend.adk_app.runner import AdkRunner
+from backend.adk_app.agent import root_agent
 
-__all__ = ["AdkRunner"]
+__all__ = ["root_agent"]

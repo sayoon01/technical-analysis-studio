@@ -1,13 +1,20 @@
-"""Phase 1: AnalysisPipeline uses one Canonical CorpusAnalyst path."""
+"""Phase 1: Analyze uses persistent job + ADK worker path."""
 
 from __future__ import annotations
 
+import inspect
 import sqlite3
 
 import pytest
+from google.genai import types
+from google.adk.models.base_llm import BaseLlm
+from google.adk.models.llm_request import LlmRequest
+from google.adk.models.llm_response import LlmResponse
+from google.adk.models.lite_llm import LiteLLMClient, LiteLlm
+from google.adk.agents import LlmAgent
 
-from backend.domain.report_plan import CorpusAnalysis
-from backend.orchestration.analysis_pipeline import AnalysisPipeline
+from backend.application.analyze_jobs import AnalyzeJobUseCase
+from backend.jobs.job_worker import AnalyzeJobWorker
 from backend.storage.database import init_schema
 
 
@@ -59,72 +66,98 @@ def _seed_ready_project(conn: sqlite3.Connection, project_id: str = "PRJ-ADK") -
     conn.commit()
 
 
-def _sample_analysis() -> CorpusAnalysis:
-    return CorpusAnalysis.model_validate(
-        {
-            "main_topic": "가공철근 MES",
-            "technical_domain": "제조",
-            "document_purpose": "분석",
-            "key_entities": [],
-            "key_technologies": [],
-            "business_or_technical_problems": [],
-            "system_components": [],
-            "processes": [],
-            "quantitative_findings": [],
-            "qualitative_findings": [],
-            "evidence_gaps": [],
-            "contradictions": [],
-            "recommended_report_focus": [],
-            "previous_edition_analysis": None,
-        }
-    )
+class FakeJsonLlm(BaseLlm):
+    async def generate_content_async(self, llm_request: LlmRequest, stream: bool = False):
+        if "corpus" in self.model:
+            out = (
+                '{"main_topic":"가공철근 MES","technical_domain":"제조","document_purpose":"분석",'
+                '"key_entities":[],"key_technologies":[],"business_or_technical_problems":[],'
+                '"system_components":[],"processes":[],"qualitative_findings":[],'
+                '"evidence_gaps":[],"contradictions":[],"recommended_report_focus":[]}'
+            )
+        else:
+            out = (
+                '{"decisions":[{"evidence_id":"EVD-BLK-1","status":"accepted","reason":"supported"}],'
+                '"accepted_count":1,"rejected_count":0,"failed_count":0}'
+            )
+        yield LlmResponse(
+            content=types.Content(role="model", parts=[types.Part(text=out)]),
+            partial=False,
+        )
 
 
-@pytest.mark.parametrize("mode", ["adk", "llm", "offline"])
-def test_analysis_pipeline_modes_share_corpus_analyst(monkeypatch, tmp_path, mode):
-    db = tmp_path / f"corpus-{mode}.db"
+def test_adk_signatures_match_phase1_constraints():
+    assert "parent_context" in str(inspect.signature(LlmAgent.run_async))
+    assert "timeout" in str(inspect.signature(LlmAgent))
+    assert "llm_client" in str(inspect.signature(LiteLlm))
+    assert "acompletion" in dir(LiteLLMClient)
+
+
+def test_analyze_job_worker_runs_adk_vertical_slice(monkeypatch, tmp_path):
+    db = tmp_path / "phase1-adk.db"
     conn = sqlite3.connect(str(db))
     conn.row_factory = sqlite3.Row
     init_schema(conn)
-    try:
-        _seed_ready_project(conn, project_id=f"PRJ-{mode.upper()}")
-        called: dict[str, object] = {"agent": 0, "adk_runner": 0}
+    _seed_ready_project(conn, project_id="PRJ-ADK")
 
-        def _fake_agent_run(self, context):
-            called["agent"] = int(called["agent"]) + 1
-            called["agent_mode"] = self.llm_mode
-            return _sample_analysis()
+    monkeypatch.setattr(
+        "backend.adk_app.model_adapter.build_agent_model",
+        lambda name: FakeJsonLlm(model=f"fake-{name}"),
+    )
+    monkeypatch.setattr(
+        "backend.adk_app.agents.source_intelligence_agent.build_agent_model",
+        lambda name: FakeJsonLlm(model=f"fake-{name}"),
+    )
+    monkeypatch.setattr(
+        "backend.adk_app.agents.evidence_curator_agent.build_agent_model",
+        lambda name: FakeJsonLlm(model=f"fake-{name}"),
+    )
+    started = AnalyzeJobUseCase(conn).start("PRJ-ADK")
+    assert started["accepted"] is True
+    assert started["busy"] is True
+    assert started["job_id"]
 
-        def _forbid_adk_run(self, config):
-            called["adk_runner"] = int(called["adk_runner"]) + 1
-            raise AssertionError("AdkRunner must not own corpus analysis after Phase 1")
+    worker = AnalyzeJobWorker(conn)
+    assert worker.run_once() is True
 
-        monkeypatch.setattr(
-            "backend.agents.corpus_analyst.agent.CorpusAnalystAgent.run",
-            _fake_agent_run,
-        )
-        monkeypatch.setattr("backend.adk_app.runner.AdkRunner.run", _forbid_adk_run)
+    job = conn.execute(
+        "SELECT status, adk_invocation_id FROM jobs WHERE job_id = ?",
+        (started["job_id"],),
+    ).fetchone()
+    assert job is not None
+    assert job["status"] == "completed"
+    assert job["adk_invocation_id"]
 
-        pipeline = AnalysisPipeline(conn, llm_mode=mode)
-        # Pipeline must not construct AdkRunner for Source Intelligence.
-        assert not hasattr(pipeline, "adk_runner")
-        result = pipeline.run(f"PRJ-{mode.upper()}")
-    finally:
-        conn.close()
+    ev_agents = {
+        r["agent_name"]
+        for r in conn.execute(
+            "SELECT agent_name FROM job_events WHERE job_id = ?", (started["job_id"],)
+        ).fetchall()
+    }
+    assert "SourceIntelligenceAgent" in ev_agents
+    assert "EvidenceCuratorAgent" in ev_agents
 
-    assert called["agent"] == 1
-    assert called["adk_runner"] == 0
-    assert called["agent_mode"] == mode
-    assert result["main_topic"] == "가공철근 MES"
-    assert result["technical_domain"] == "제조"
-    assert result["analysis"]["main_topic"] == "가공철근 MES"
+    analysis = conn.execute(
+        "SELECT payload_json FROM corpus_analyses WHERE project_id = ?",
+        ("PRJ-ADK",),
+    ).fetchone()
+    assert analysis is not None
+    assert "가공철근 MES" in analysis["payload_json"]
 
 
-def test_adk_mode_does_not_import_removed_corpus_workflow():
-    """Removed Phase-1 dual-path modules must stay gone."""
-    with pytest.raises(ModuleNotFoundError):
-        __import__("backend.adk_app.workflows.planning_workflow")
-    with pytest.raises(ModuleNotFoundError):
-        __import__("backend.adk_app.agents.corpus_analyst")
-    with pytest.raises(ModuleNotFoundError):
-        __import__("backend.adk_app.prompt_loader")
+def test_concurrent_analyze_requests_are_db_guarded(tmp_path):
+    db = tmp_path / "phase1-adk-concurrency.db"
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    init_schema(conn)
+    _seed_ready_project(conn, project_id="PRJ-CONC")
+    usecase = AnalyzeJobUseCase(conn)
+    first = usecase.start("PRJ-CONC")
+    assert first["accepted"] is True
+    with pytest.raises(ValueError, match="already running"):
+        usecase.start("PRJ-CONC")
+    count = conn.execute(
+        "SELECT COUNT(*) c FROM jobs WHERE project_id = ? AND status IN ('queued','running')",
+        ("PRJ-CONC",),
+    ).fetchone()["c"]
+    assert count == 1

@@ -15,8 +15,10 @@ from backend.services.job_status import (
     lock_for,
     set_job,
 )
+from backend.jobs.job_repository import JobRepository
 from backend.storage.plan_repository import AnalysisRepository, PlanRepository
 from backend.storage.repositories import ProjectRepository
+from backend.application.analyze_jobs import AnalyzeJobUseCase
 
 
 class PlanService:
@@ -38,6 +40,40 @@ class PlanService:
         project = self.projects.get(project_id)
         if not project:
             raise KeyError(project_id)
+        job_repo = JobRepository(self.conn)
+        persistent = job_repo.latest_job_for_project(project_id)
+        if persistent and persistent.get("job_type") == "ANALYZE":
+            status_text = persistent.get("status")
+            stage = str(project["stage"])
+            busy = status_text in {"queued", "running"} and stage in {
+                ProjectStage.ANALYZING.value,
+                ProjectStage.PLANNING.value,
+                ProjectStage.WAITING_FOR_OUTLINE_APPROVAL.value,
+            }
+            phase = persistent.get("phase") if busy else None
+            interrupted = False
+            if not busy and project["stage"] == ProjectStage.PRODUCING.value:
+                eid = project.get("current_edition_id")
+                if eid:
+                    row = self.conn.execute(
+                        "SELECT status FROM report_editions WHERE edition_id = ?",
+                        (eid,),
+                    ).fetchone()
+                    if row and row["status"] == "PRODUCING":
+                        interrupted = True
+            status: dict = {
+                "project_id": project_id,
+                "stage": project["stage"],
+                "busy": busy,
+                "phase": phase,
+                "label": PHASE_LABELS.get(phase or "", phase),
+                "started_at": persistent.get("started_at"),
+                "current_edition_id": project.get("current_edition_id"),
+                "interrupted": interrupted,
+            }
+            if status_text == "failed" and persistent.get("error_message"):
+                status["error"] = persistent["error_message"]
+            return status
         job = get_job(project_id)
         lock = lock_for(project_id)
         # Only live in-process jobs count as busy. DB stage/edition status can
@@ -104,32 +140,7 @@ class PlanService:
         return status
 
     def analyze(self, project_id: str) -> dict:
-        if not self.projects.get(project_id):
-            raise KeyError(project_id)
-        lock = lock_for(project_id)
-        if not lock.acquire(blocking=False):
-            raise ValueError("Analysis already running for this project")
-        set_job(project_id, "analyzing")
-        try:
-            # Allow analyze from ANALYZING or after ingest
-            project = self.projects.get(project_id)
-            stage = ProjectStage(project["stage"])
-            if stage in {ProjectStage.CREATED, ProjectStage.INGESTING}:
-                raise ValueError(f"Sources not ready (stage={stage})")
-            if stage not in {
-                ProjectStage.ANALYZING,
-                ProjectStage.PLANNING,
-                ProjectStage.WAITING_FOR_OUTLINE_APPROVAL,
-                ProjectStage.FAILED,
-            }:
-                # Re-analyze from later stages is allowed by resetting to ANALYZING
-                self.projects.update_stage(project_id, ProjectStage.ANALYZING.value)
-            elif stage != ProjectStage.ANALYZING:
-                self.projects.update_stage(project_id, ProjectStage.ANALYZING.value)
-            return self.analysis_pipeline.run(project_id)
-        finally:
-            set_job(project_id, None)
-            lock.release()
+        return AnalyzeJobUseCase(self.conn).start(project_id)
 
     def generate_plan(self, project_id: str) -> dict:
         if not self.projects.get(project_id):

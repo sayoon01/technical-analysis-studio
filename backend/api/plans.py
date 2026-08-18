@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from backend.api.deps import get_plan_service
+from backend.api.deps import get_analyze_job_usecase, get_plan_service
 
 router = APIRouter(tags=["analysis-plans"])
 
@@ -25,7 +25,7 @@ class PatchOutlineBody(BaseModel):
 @router.post("/api/projects/{project_id}/analyze")
 def analyze(project_id: str):
     try:
-        return get_plan_service().analyze(project_id)
+        return get_analyze_job_usecase().start(project_id)
     except KeyError:
         raise HTTPException(404, "Project not found") from None
     except ValueError as e:

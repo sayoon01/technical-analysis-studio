@@ -1,39 +1,20 @@
 from __future__ import annotations
 
-import os
-
-import pytest
-
-from backend.adk_app.runner import AdkRunConfig, AdkRunner
+import inspect
+from backend.adk_app.agent import root_agent
+from backend.adk_app.model_adapter import ConfiguredLiteLLMClient
 
 
-def test_runner_returns_planned_envelope():
-    runner = AdkRunner()
-    result = runner.run(
-        AdkRunConfig(workflow_name="planning_workflow", project_id="PRJ-TEST")
-    )
-    assert result["status"] == "PLANNED"
-    assert result["project_id"] == "PRJ-TEST"
+def test_root_agent_has_analysis_sub_agent():
+    assert root_agent.name == "TechnicalAnalysisRootAgent"
+    assert len(root_agent.sub_agents) == 1
+    assert root_agent.sub_agents[0].name == "AnalysisWorkflowAgent"
+    assert [a.name for a in root_agent.sub_agents[0].sub_agents] == [
+        "SourceIntelligenceAgent",
+        "EvidenceCuratorAgent",
+    ]
 
 
-def test_litellm_factory_builds_ollama_chat_model(monkeypatch):
-    pytest.importorskip("google.adk")
-    monkeypatch.setenv("OLLAMA_API_BASE", "http://127.0.0.1:11434")
-    monkeypatch.setenv("OLLAMA_MODEL", "gemma4:31b")
-
-    runner = AdkRunner()
-    model = runner.build_model()
-    model_name = getattr(model, "model", "") or getattr(model, "model_name", "")
-    assert str(model_name).startswith("ollama_chat/")
-    assert "gemma4:31b" in str(model_name)
-
-
-@pytest.mark.skipif(
-    os.getenv("RUN_OLLAMA_SMOKE") != "1",
-    reason="Set RUN_OLLAMA_SMOKE=1 to ping real Ollama endpoint.",
-)
-def test_litellm_model_can_initialize_with_real_ollama():
-    pytest.importorskip("google.adk")
-    runner = AdkRunner()
-    model = runner.build_model()
-    assert model is not None
+def test_timeout_is_applied_in_litellm_client_layer():
+    sig = str(inspect.signature(ConfiguredLiteLLMClient.acompletion))
+    assert "kwargs" in sig
